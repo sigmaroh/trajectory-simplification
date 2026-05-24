@@ -65,6 +65,8 @@ def plot_trajectory_comparison(trajectory: pd.DataFrame,
         'none': 'None',
         'dp': 'Douglas-Peucker',
         'rdp': 'Douglas-Peucker',
+        'us': 'Uniform Sampling',
+        'at': 'Adaptive Threshold',
         'vw': 'Visvalingam-Whyatt',
         'rw': 'Reumann-Witkam',
         'squish': 'SQUISH',
@@ -164,9 +166,11 @@ def plot_compression_error_curves(results_df: pd.DataFrame,
     x_pos    = {cr: i for i, cr in enumerate(sorted(TARGET_CRS))}
     x_labels = [f"{int(cr)}×" for cr in sorted(TARGET_CRS)]
 
-    algo_order  = ['dp','vw','squish','rw','greedy_policy','proposed']
+    algo_order  = ['dp','us','at','vw','squish','rw','greedy_policy','proposed']
     algo_colors = {
         'dp':           '#FF6600',   # orange
+        'us':           '#3498DB',   # blue
+        'at':           '#1ABC9C',   # teal
         'vw':           '#2ECC71',   # green
         'squish':       '#E91E63',   # pink
         'rw':           '#9B59B6',   # purple
@@ -373,9 +377,11 @@ def plot_per_metric_pages(results_df: pd.DataFrame,
 
     df['cr_label'] = df['compression_ratio'].apply(snap)
 
-    algo_order = ['dp', 'vw', 'squish', 'rw', 'greedy_policy', 'proposed']
+    algo_order = ['dp', 'us', 'at', 'vw', 'squish', 'rw', 'greedy_policy', 'proposed']
     algo_colors = {
         'dp':           '#FF6600',
+        'us':           '#3498DB',
+        'at':           '#1ABC9C',
         'vw':           '#2ECC71',
         'squish':       '#E91E63',
         'rw':           '#9B59B6',

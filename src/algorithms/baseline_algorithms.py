@@ -9,10 +9,14 @@ This module implements standard baseline algorithms for trajectory simplificatio
 5. Greedy Policy (RL-inspired) - Sequential keep/drop via local value function
    Inspired by: Wang et al. (2021). Trajectory simplification with reinforcement
    learning. ICDE 2021, 684-695. IEEE.
+6. Uniform Sampling (US) - Fixed interval point selection
+7. Adaptive Threshold (AT) - Speed-adaptive sliding window
 
 Each algorithm has different strengths and weaknesses:
 - RDP: Good for geometric preservation, but ignores temporal/speed information
 - Greedy Policy: Balances geometric deviation and motion change signal
+- Uniform Sampling: Simple and fast, but ignores trajectory shape
+- Adaptive Threshold: Considers speed dynamics, adapts error threshold locally
 """
 
 import numpy as np
@@ -174,6 +178,119 @@ def douglas_peucker(trajectory: Union[pd.DataFrame, np.ndarray],
     
     return points[indices_list]
 
+
+
+def uniform_sampling(trajectory: Union[pd.DataFrame, np.ndarray],
+                     num_points: int,
+                     indices: bool = False) -> Union[np.ndarray, List[int]]:
+    """
+    Uniform Sampling: select points at evenly-spaced indices.
+
+    Complexity: O(n)
+    Strengths: Extremely fast, predictable compression.
+    Weaknesses: Ignores trajectory shape, may skip important points.
+
+    Args:
+        trajectory: DataFrame with 'lat', 'lon' columns or array of (lat, lon)
+        num_points: Target number of points to keep
+        indices: If True, return indices instead of points
+
+    Returns:
+        Simplified trajectory or list of indices
+    """
+    points = trajectory_to_points(trajectory)
+    n = len(points)
+
+    if n <= num_points:
+        idx = list(range(n))
+    else:
+        # Always include first and last; distribute the rest evenly
+        idx = list(np.linspace(0, n - 1, num_points, dtype=int))
+        idx = sorted(set(idx))
+
+    if indices:
+        return idx
+    return points[idx]
+
+
+def adaptive_threshold(trajectory: Union[pd.DataFrame, np.ndarray],
+                       epsilon: float,
+                       speed_weight: float = 0.5,
+                       indices: bool = False) -> Union[np.ndarray, List[int]]:
+    """
+    Adaptive Threshold: sliding-window with a speed-adaptive error threshold.
+
+    The effective tolerance at each step is scaled by local speed so that
+    high-speed segments get a tighter threshold (more points kept) and
+    low-speed segments get a looser one.
+
+    Complexity: O(n)
+    Strengths: Considers speed dynamics, adapts locally.
+    Weaknesses: Sensitive to speed noise; does not explicitly preserve stops/turns.
+
+    Args:
+        trajectory: DataFrame with 'lat', 'lon', and optionally 'timestamp'
+        epsilon: Base error threshold (metres)
+        speed_weight: How strongly speed modulates the threshold (0 = uniform)
+        indices: If True, return indices instead of points
+
+    Returns:
+        Simplified trajectory or list of indices
+    """
+    points = trajectory_to_points(trajectory)
+    n = len(points)
+
+    if n <= 2:
+        idx = list(range(n))
+        return idx if indices else points[idx]
+
+    # Compute per-segment speeds if timestamps are available
+    speeds = np.ones(n)
+    if isinstance(trajectory, pd.DataFrame) and 'timestamp' in trajectory.columns:
+        ts = pd.to_datetime(trajectory['timestamp']).values
+        for i in range(1, n):
+            dt = (pd.Timestamp(ts[i]) - pd.Timestamp(ts[i - 1])).total_seconds()
+            if dt > 0:
+                lat = np.radians(trajectory['lat'].values)
+                lon = np.radians(trajectory['lon'].values)
+                dlat = lat[i] - lat[i - 1]
+                dlon = lon[i] - lon[i - 1]
+                a = (np.sin(dlat / 2) ** 2
+                     + np.cos(lat[i - 1]) * np.cos(lat[i]) * np.sin(dlon / 2) ** 2)
+                dist = EARTH_RADIUS_M * 2 * np.arcsin(np.sqrt(a))
+                speeds[i] = dist / dt
+
+    max_speed = speeds.max() if speeds.max() > 0 else 1.0
+    norm_speeds = speeds / max_speed  # normalised to [0, 1]
+
+    indices_list = [0]
+    start_idx = 0
+
+    for i in range(2, n):
+        local_speed = norm_speeds[i]
+        # Higher speed → tighter threshold (keep more detail)
+        adaptive_eps = epsilon * (1.0 - speed_weight * local_speed)
+        adaptive_eps = max(adaptive_eps, epsilon * 0.1)  # floor at 10% of base
+
+        max_error = 0.0
+        for j in range(start_idx + 1, i):
+            dist = point_to_line_distance(
+                tuple(points[j]),
+                tuple(points[start_idx]),
+                tuple(points[i])
+            )
+            max_error = max(max_error, dist)
+
+        if max_error > adaptive_eps:
+            indices_list.append(i - 1)
+            start_idx = i - 1
+
+    if indices_list[-1] != n - 1:
+        indices_list.append(n - 1)
+
+    if indices:
+        return indices_list
+    return points[indices_list]
 
 
 def visvalingam_whyatt(trajectory: Union[pd.DataFrame, np.ndarray],
@@ -476,7 +593,7 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
     
     Args:
         trajectory: Input trajectory
-        algorithm: Algorithm name ('rdp', 'vw', 'squish', 'rw', 'greedy_policy', ...)
+        algorithm: Algorithm name ('rdp', 'us', 'at', 'vw', 'squish', 'rw', 'greedy_policy', ...)
         budget: Target number of points
         **kwargs: Additional algorithm-specific parameters
         
@@ -495,6 +612,12 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
         'dp': 'rdp',
         'douglas-peucker': 'rdp',
         'douglas_peucker': 'rdp',
+        'uniform_sampling': 'us',
+        'uniform-sampling': 'us',
+        'us': 'us',
+        'adaptive_threshold': 'at',
+        'adaptive-threshold': 'at',
+        'at': 'at',
         'visvalingam-whyatt': 'vw',
         'visvalingam_whyatt': 'vw',
         'vw': 'vw',
@@ -537,6 +660,17 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
     if algorithm == 'rdp':
         selected_indices = search_budget_indices(
             lambda epsilon: douglas_peucker(trajectory, epsilon, indices=True)
+        )
+        return select_points(trajectory, selected_indices)
+
+    elif algorithm == 'us':
+        return select_points(trajectory, uniform_sampling(trajectory, budget, indices=True))
+
+    elif algorithm == 'at':
+        speed_weight = kwargs.get('speed_weight', 0.5)
+        selected_indices = search_budget_indices(
+            lambda epsilon: adaptive_threshold(trajectory, epsilon,
+                                              speed_weight=speed_weight, indices=True)
         )
         return select_points(trajectory, selected_indices)
 
