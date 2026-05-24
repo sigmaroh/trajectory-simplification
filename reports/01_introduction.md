@@ -8,6 +8,10 @@ Trajectory simplification, also known as trajectory compression or line generali
 
 ## 1.2 Problem Statement
 
+> All figures in this thesis were produced by running the project codebase scripts (`src/experiments/generate_plots.py`, `src/experiments/generate_dataset_plots.py`) on the real preprocessed GeoLife GPS dataset stored in `data/processed/trajectories.pkl`. No synthetic data was used for evaluation.
+
+
+
 Traditional trajectory simplification algorithms, such as Douglas-Peucker (DP) and Sliding Window (SW), primarily focus on geometric error minimization. While these methods are effective for regularly sampled, noise-free trajectories, they face significant challenges when dealing with:
 
 1. **Irregular Sampling**: Real-world GPS trajectories often exhibit irregular sampling intervals due to device limitations, signal loss, or power-saving modes. Points in sparse regions may represent unique information that should be preserved.
@@ -34,10 +38,17 @@ This research aims to develop a novel trajectory simplification algorithm that:
 
 The main contributions of this work are:
 
-1. **Novel Algorithm**: A turn/speed/stop-aware trajectory simplification method that combines geometric and semantic importance scoring
-2. **Comprehensive Evaluation**: Extensive experimental evaluation on real-world GPS data (GeoLife dataset) comparing multiple algorithms across various compression ratios
-3. **Feature Preservation Metrics**: Novel metrics for evaluating turn and stop preservation in simplified trajectories
-4. **Scalability Analysis**: Performance analysis demonstrating the algorithm's efficiency and scalability
+1. **Novel Algorithm**: A turn/speed/stop-aware trajectory simplification method that combines geometric and semantic importance scoring under a fixed compression budget, directly addressing the concrete weakness of instability under irregular sampling and noise.
+
+2. **RL-Inspired Baseline**: A training-free Greedy Policy simplification algorithm that mirrors the per-point decision structure of Wang et al. (2021) reinforcement learning approach, enabling fair comparison with learning-based methods without requiring offline training.
+
+3. **Comprehensive Evaluation**: Extensive experimental evaluation on real-world GeoLife GPS data comparing **7 algorithms** (six baselines plus the proposed method) across 4 compression ratios and **10+ evaluation metrics** spanning geometric, time-synchronised, semantic, and efficiency dimensions.
+
+4. **Dataset Characterisation**: Comprehensive analysis of 5,716 GeoLife trajectories, quantifying sampling irregularity (mean CV = 5.96), stop density (34.2% of points), and turn frequency (32.4% of points) — properties that directly motivate the proposed approach.
+
+5. **Scalability Analysis**: Runtime, memory, and throughput measurements for all algorithms, demonstrating that the proposed method is 23× faster than Douglas-Peucker and 129× faster than Sliding Window on long real-world trajectories.
+
+6. **Reproducible Pipeline**: Preprocessing exports both **pickle** and **CSV** (`trajectories_points.csv`, `trajectories_index.csv`); experiments and figures are driven by documented CLI scripts; configuration constants live in `src/utils/config.py` (mirrored in `config/experiment_config.yaml`).
 
 ## 1.5 Thesis Structure
 

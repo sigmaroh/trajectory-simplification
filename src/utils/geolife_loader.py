@@ -21,6 +21,12 @@ from typing import List, Tuple, Dict
 import warnings
 warnings.filterwarnings('ignore')
 
+from src.utils.config import (
+    EARTH_RADIUS_M,
+    STOP_SPEED_THRESHOLD_MS,
+    TURN_THRESHOLD_DEG,
+)
+
 
 class GeoLifeLoader:
     """Loader for GeoLife GPS trajectory dataset."""
@@ -266,8 +272,7 @@ def compute_trajectory_properties(trajectory: pd.DataFrame) -> Dict:
     dlon = np.diff(lon_rad)
     a = np.sin(dlat/2)**2 + np.cos(lat_rad[:-1]) * np.cos(lat_rad[1:]) * np.sin(dlon/2)**2
     c = 2 * np.arcsin(np.sqrt(a))
-    earth_radius = 6371000  # meters
-    distances = earth_radius * c
+    distances = EARTH_RADIUS_M * c
     
     # Compute speeds (m/s)
     speeds = distances / (time_diffs[1:].values + 1e-6)  # Avoid division by zero
@@ -288,12 +293,10 @@ def compute_trajectory_properties(trajectory: pd.DataFrame) -> Dict:
     direction_changes = np.concatenate([[0], direction_changes])
     
     # Identify stops (speed < threshold, e.g., 1 m/s ≈ 3.6 km/h)
-    stop_threshold = 1.0  # m/s
-    is_stop = speeds < stop_threshold
-    
+    is_stop = speeds < STOP_SPEED_THRESHOLD_MS
+
     # Identify turns (direction change > threshold, e.g., 30 degrees)
-    turn_threshold = 30.0  # degrees
-    is_turn = direction_changes > turn_threshold
+    is_turn = direction_changes > TURN_THRESHOLD_DEG
     
     properties = {
         'num_points': len(trajectory),
@@ -356,8 +359,7 @@ def preprocess_trajectory(trajectory: pd.DataFrame,
         dlon = np.diff(lon_rad)
         a = np.sin(dlat/2)**2 + np.cos(lat_rad[:-1]) * np.cos(lat_rad[1:]) * np.sin(dlon/2)**2
         c = 2 * np.arcsin(np.sqrt(a))
-        earth_radius = 6371000
-        distances = earth_radius * c
+        distances = EARTH_RADIUS_M * c
         
         # Remove points with very large jumps (outliers)
         if len(distances) > 0:

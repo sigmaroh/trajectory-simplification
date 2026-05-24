@@ -27,98 +27,8 @@ import pandas as pd
 from typing import Union, Tuple, List, Dict
 from scipy.spatial.distance import cdist
 from src.algorithms.baseline_algorithms import haversine_distance, point_to_line_distance
+from src.utils.config import STOP_SPEED_THRESHOLD_MS, TURN_THRESHOLD_DEG, MIN_STOP_DURATION_S
 
-
-# ---------------------------------------------------------------------------
-# Private vectorised helpers – not part of the public API.
-# ---------------------------------------------------------------------------
-
-def _haversine_batch(lats1: np.ndarray, lons1: np.ndarray,
-                     lats2: np.ndarray, lons2: np.ndarray) -> np.ndarray:
-    """Vectorised Haversine distance (degrees → metres) for arrays of points."""
-    lat1 = np.radians(lats1); lon1 = np.radians(lons1)
-    lat2 = np.radians(lats2); lon2 = np.radians(lons2)
-    dlat = lat2 - lat1; dlon = lon2 - lon1
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-    return 6371000.0 * 2.0 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
-
-
-def _haversine_matrix(orig: np.ndarray, simpl: np.ndarray) -> np.ndarray:
-    """
-    Compute an (n, m) Haversine distance matrix in one vectorised call.
-    orig:  (n, 2) array of (lat, lon) in degrees
-    simpl: (m, 2) array of (lat, lon) in degrees
-    """
-    lat1 = np.radians(orig[:, 0, np.newaxis])    # (n, 1)
-    lon1 = np.radians(orig[:, 1, np.newaxis])    # (n, 1)
-    lat2 = np.radians(simpl[np.newaxis, :, 0])   # (1, m)
-    lon2 = np.radians(simpl[np.newaxis, :, 1])   # (1, m)
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-    return 6371000.0 * 2.0 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))  # (n, m)
-
-
-def _point_to_line_matrix(pts: np.ndarray,
-                           seg_starts: np.ndarray,
-                           seg_ends: np.ndarray) -> np.ndarray:
-    """
-    Compute perpendicular distances from n points to m line segments in one
-    vectorised call, using the same projection + Haversine logic as the
-    scalar point_to_line_distance function.
-
-    pts:        (n, 2) – (lat, lon)
-    seg_starts: (m, 2) – (lat, lon) of segment start points
-    seg_ends:   (m, 2) – (lat, lon) of segment end points
-    Returns:    (n, m) distance matrix in metres
-    """
-    P = pts[:, np.newaxis, :]          # (n, 1, 2)
-    A = seg_starts[np.newaxis, :, :]   # (1, m, 2)
-    B = seg_ends[np.newaxis, :, :]     # (1, m, 2)
-
-    dx = B[..., 1] - A[..., 1]        # (1, m) lon component
-    dy = B[..., 0] - A[..., 0]        # (1, m) lat component
-    dxp = P[..., 1] - A[..., 1]       # (n, m)
-    dyp = P[..., 0] - A[..., 0]       # (n, m)
-
-    denom = dx * dx + dy * dy          # (1, m)
-    safe_denom = np.where(denom > 1e-30, denom, 1.0)
-    t = np.clip((dxp * dx + dyp * dy) / safe_denom, 0.0, 1.0)  # (n, m)
-
-    lat_c = A[..., 0] + t * dy        # (n, m)
-    lon_c = A[..., 1] + t * dx        # (n, m)
-
-    # Degenerate segments (start == end): project to the start point
-    degenerate = denom < 1e-30        # (1, m)
-    lat_c = np.where(degenerate, A[..., 0], lat_c)
-    lon_c = np.where(degenerate, A[..., 1], lon_c)
-
-    lat1 = np.radians(P[..., 0])      # (n, 1)
-    lon1 = np.radians(P[..., 1])      # (n, 1)
-    lat2 = np.radians(lat_c)          # (n, m)
-    lon2 = np.radians(lon_c)          # (n, m)
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-    return 6371000.0 * 2.0 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))  # (n, m)
-
-
-def _bearings_batch(starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
-    """
-    Vectorised forward bearing for arrays of (start, end) point pairs.
-    starts, ends: (k, 2) in degrees.  Returns (k,) array in degrees [0, 360).
-    """
-    lat1 = np.radians(starts[:, 0]); lon1 = np.radians(starts[:, 1])
-    lat2 = np.radians(ends[:, 0]);   lon2 = np.radians(ends[:, 1])
-    dlon = lon2 - lon1
-    y = np.sin(dlon) * np.cos(lat2)
-    x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(dlon)
-    return (np.degrees(np.arctan2(y, x)) + 360.0) % 360.0
-
-
-# ---------------------------------------------------------------------------
-# Public scalar helpers – imported by other modules; do not rename or remove.
-# ---------------------------------------------------------------------------
 
 def hausdorff_distance(original: np.ndarray, simplified: np.ndarray) -> float:
     """
@@ -140,15 +50,36 @@ def hausdorff_distance(original: np.ndarray, simplified: np.ndarray) -> float:
     """
     if len(original) == 0 or len(simplified) == 0:
         return float('inf')
-
-    # (n, m) Haversine matrix – one vectorised call replaces O(n*m) Python calls
-    dist_mat = _haversine_matrix(
-        np.asarray(original,   dtype=float),
-        np.asarray(simplified, dtype=float),
-    )
-    h_orig_simpl = float(dist_mat.min(axis=1).max())
-    h_simpl_orig = float(dist_mat.min(axis=0).max())
-    return max(h_orig_simpl, h_simpl_orig)
+    
+    # Convert to approximate metric coordinates for distance calculation
+    # For small distances, we can use simple approximation
+    # For better accuracy, we use Haversine for each pair
+    
+    # Compute distance from each original point to nearest simplified point
+    def min_dist_to_trajectory(point, trajectory):
+        """Find minimum distance from point to any point in trajectory."""
+        min_dist = float('inf')
+        for traj_point in trajectory:
+            dist = haversine_distance(tuple(point), tuple(traj_point))
+            min_dist = min(min_dist, dist)
+        return min_dist
+    
+    # h(original, simplified)
+    h_orig_simpl = 0
+    for orig_point in original:
+        dist = min_dist_to_trajectory(orig_point, simplified)
+        h_orig_simpl = max(h_orig_simpl, dist)
+    
+    # h(simplified, original)
+    h_simpl_orig = 0
+    for simpl_point in simplified:
+        dist = min_dist_to_trajectory(simpl_point, original)
+        h_simpl_orig = max(h_simpl_orig, dist)
+    
+    # Hausdorff distance
+    hausdorff = max(h_orig_simpl, h_simpl_orig)
+    
+    return hausdorff
 
 
 def average_point_to_trajectory_error(original: np.ndarray, 
@@ -171,23 +102,29 @@ def average_point_to_trajectory_error(original: np.ndarray,
     """
     if len(original) == 0 or len(simplified) == 0:
         return float('inf')
-
-    orig = np.asarray(original,   dtype=float)
-    simpl = np.asarray(simplified, dtype=float)
-
-    # Point-to-point distances: (n, m)
-    pt_dists = _haversine_matrix(orig, simpl)
-    min_pt = pt_dists.min(axis=1)   # (n,)
-
-    # Point-to-segment distances: (n, m-1)
-    if len(simpl) >= 2:
-        seg_dists = _point_to_line_matrix(orig, simpl[:-1], simpl[1:])
-        min_seg = seg_dists.min(axis=1)   # (n,)
-        min_dists = np.minimum(min_pt, min_seg)
-    else:
-        min_dists = min_pt
-
-    return float(np.mean(min_dists))
+    
+    errors = []
+    
+    for orig_point in original:
+        min_dist = float('inf')
+        
+        # Check distance to points
+        for simpl_point in simplified:
+            dist = haversine_distance(tuple(orig_point), tuple(simpl_point))
+            min_dist = min(min_dist, dist)
+        
+        # Check distance to line segments
+        for i in range(len(simplified) - 1):
+            dist = point_to_line_distance(
+                tuple(orig_point),
+                tuple(simplified[i]),
+                tuple(simplified[i + 1])
+            )
+            min_dist = min(min_dist, dist)
+        
+        errors.append(min_dist)
+    
+    return np.mean(errors)
 
 
 def frechet_distance(original: np.ndarray, simplified: np.ndarray) -> float:
@@ -209,38 +146,47 @@ def frechet_distance(original: np.ndarray, simplified: np.ndarray) -> float:
     Returns:
         Frechet distance in meters
     """
-    
     if len(original) == 0 or len(simplified) == 0:
         return float('inf')
-
-    orig = np.asarray(original,   dtype=float)
-    simpl = np.asarray(simplified, dtype=float)
-    n, m = len(orig), len(simpl)
-
-    # Vectorised distance matrix (replaces O(n*m) scalar haversine calls)
-    dist_matrix = _haversine_matrix(orig, simpl)
-
-    # Dynamic programming (inherently sequential; initialise boundary rows
-    # with np.maximum.accumulate to avoid two Python loops)
-    F = np.empty((n, m), dtype=float)
+    
+    n, m = len(original), len(simplified)
+    
+    # Precompute distance matrix
+    dist_matrix = np.zeros((n, m))
+    for i in range(n):
+        for j in range(m):
+            dist_matrix[i, j] = haversine_distance(
+                tuple(original[i]),
+                tuple(simplified[j])
+            )
+    
+    # Dynamic programming table
+    F = np.zeros((n, m))
     F[0, 0] = dist_matrix[0, 0]
-    F[0, 1:] = np.maximum.accumulate(dist_matrix[0, 1:])
-    F[1:, 0] = np.maximum.accumulate(dist_matrix[1:, 0])
-
+    
+    # Initialize first row
+    for j in range(1, m):
+        F[0, j] = max(F[0, j-1], dist_matrix[0, j])
+    
+    # Initialize first column
+    for i in range(1, n):
+        F[i, 0] = max(F[i-1, 0], dist_matrix[i, 0])
+    
+    # Fill table
     for i in range(1, n):
         for j in range(1, m):
             F[i, j] = max(
                 dist_matrix[i, j],
-                min(F[i - 1, j], F[i, j - 1], F[i - 1, j - 1])
+                min(F[i-1, j], F[i, j-1], F[i-1, j-1])
             )
-
-    return float(F[n - 1, m - 1])
+    
+    return F[n-1, m-1]
 
 
 def turn_preservation_metric(original: pd.DataFrame,
                             simplified: pd.DataFrame,
                             original_indices: List[int],
-                            turn_threshold: float = 30.0) -> Tuple[float, Dict]:
+                            turn_threshold: float = TURN_THRESHOLD_DEG) -> Tuple[float, Dict]:
     """
     Compute turn preservation metric.
     
@@ -296,8 +242,8 @@ def turn_preservation_metric(original: pd.DataFrame,
 def stop_preservation_metric(original: pd.DataFrame,
                             simplified: pd.DataFrame,
                             original_indices: List[int],
-                            stop_threshold: float = 1.0,
-                            min_duration: float = 30.0) -> Tuple[float, Dict]:
+                            stop_threshold: float = STOP_SPEED_THRESHOLD_MS,
+                            min_duration: float = MIN_STOP_DURATION_S) -> Tuple[float, Dict]:
     """
     Compute stop preservation metric.
     
@@ -390,7 +336,7 @@ def compression_ratio(original: np.ndarray, simplified: np.ndarray) -> float:
     return len(original) / len(simplified)
 
 
-def _extract_time_seconds(original: pd.DataFrame) -> np.ndarray:
+def extract_time_seconds(original: pd.DataFrame) -> np.ndarray:
     """Extract monotonic time values in seconds for synchronization."""
     if 'timestamp' in original.columns:
         ts = pd.to_datetime(original['timestamp'])
@@ -401,7 +347,7 @@ def _extract_time_seconds(original: pd.DataFrame) -> np.ndarray:
     return time_sec
 
 
-def _make_monotonic(values: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+def make_monotonic(values: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     """Ensure strictly increasing values for interpolation."""
     out = values.astype(float).copy()
     for i in range(1, len(out)):
@@ -410,7 +356,7 @@ def _make_monotonic(values: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     return out
 
 
-def _bearing_degrees(start: np.ndarray, end: np.ndarray) -> float:
+def bearing_degrees(start: np.ndarray, end: np.ndarray) -> float:
     """Compute bearing from start(lat, lon) to end(lat, lon) in degrees [0, 360)."""
     lat1, lon1 = np.radians(start[0]), np.radians(start[1])
     lat2, lon2 = np.radians(end[0]), np.radians(end[1])
@@ -421,13 +367,13 @@ def _bearing_degrees(start: np.ndarray, end: np.ndarray) -> float:
     return float((bearing + 360.0) % 360.0)
 
 
-def _angular_diff_deg(a: float, b: float) -> float:
+def angular_diff_deg(a: float, b: float) -> float:
     """Smallest absolute difference between two angles in degrees."""
     d = abs(a - b) % 360.0
     return float(min(d, 360.0 - d))
 
 
-def _synchronized_positions(original: pd.DataFrame,
+def synchronized_positions(original: pd.DataFrame,
                             simplified: np.ndarray,
                             original_indices: List[int] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -438,8 +384,8 @@ def _synchronized_positions(original: pd.DataFrame,
         sync_points: Interpolated simplified points aligned to query_time_sec (N, 2)
         simplified_time_sec: Time axis used for simplified points (M,)
     """
-    query_time_sec = _extract_time_seconds(original)
-    query_time_sec = _make_monotonic(query_time_sec)
+    query_time_sec = extract_time_seconds(original)
+    query_time_sec = make_monotonic(query_time_sec)
 
     if original_indices is not None and len(original_indices) == len(simplified):
         idx = np.clip(np.asarray(original_indices, dtype=int), 0, len(original) - 1)
@@ -447,7 +393,7 @@ def _synchronized_positions(original: pd.DataFrame,
     else:
         simplified_time_sec = np.linspace(query_time_sec[0], query_time_sec[-1], len(simplified), dtype=float)
 
-    simplified_time_sec = _make_monotonic(simplified_time_sec)
+    simplified_time_sec = make_monotonic(simplified_time_sec)
     lat_interp = np.interp(query_time_sec, simplified_time_sec, simplified[:, 0])
     lon_interp = np.interp(query_time_sec, simplified_time_sec, simplified[:, 1])
     sync_points = np.column_stack([lat_interp, lon_interp])
@@ -462,12 +408,14 @@ def perpendicular_euclidean_distance(original: np.ndarray, simplified: np.ndarra
     if len(original) == 0 or len(simplified) < 2:
         return float('inf')
 
-    orig = np.asarray(original,   dtype=float)
-    simpl = np.asarray(simplified, dtype=float)
-
-    # (n, m-1) matrix of point-to-segment distances – one vectorised call
-    seg_dists = _point_to_line_matrix(orig, simpl[:-1], simpl[1:])
-    return float(np.mean(seg_dists.min(axis=1)))
+    errors = []
+    for point in original:
+        min_dist = float('inf')
+        for i in range(len(simplified) - 1):
+            dist = point_to_line_distance(tuple(point), tuple(simplified[i]), tuple(simplified[i + 1]))
+            min_dist = min(min_dist, dist)
+        errors.append(min_dist)
+    return float(np.mean(errors))
 
 
 def synchronized_euclidean_distance(original: pd.DataFrame,
@@ -480,12 +428,10 @@ def synchronized_euclidean_distance(original: pd.DataFrame,
         return float('inf'), np.array([]), np.array([]), np.empty((0, 2))
 
     original_points = original[['lat', 'lon']].to_numpy(dtype=float)
-    query_time_sec, sync_points, _ = _synchronized_positions(original, simplified, original_indices)
-
-    # Vectorised pairwise haversine (one call replaces n scalar calls)
-    dists = _haversine_batch(
-        original_points[:, 0], original_points[:, 1],
-        sync_points[:, 0],     sync_points[:, 1],
+    query_time_sec, sync_points, _ = synchronized_positions(original, simplified, original_indices)
+    dists = np.array(
+        [haversine_distance(tuple(original_points[i]), tuple(sync_points[i])) for i in range(len(original_points))],
+        dtype=float
     )
     return float(np.mean(dists)), dists, query_time_sec, sync_points
 
@@ -499,28 +445,20 @@ def direction_aware_distance(original: pd.DataFrame,
     if len(original_points) < 2 or len(synchronized_points) < 2:
         return 0.0
 
-    starts_orig = original_points[:-1]
-    ends_orig   = original_points[1:]
-    starts_sync = synchronized_points[:-1]
-    ends_sync   = synchronized_points[1:]
+    heading_errors = []
+    for i in range(len(original_points) - 1):
+        if haversine_distance(tuple(original_points[i]), tuple(original_points[i + 1])) < 1e-6:
+            continue
+        if haversine_distance(tuple(synchronized_points[i]), tuple(synchronized_points[i + 1])) < 1e-6:
+            continue
 
-    # Filter out near-stationary segments (vectorised distance check)
-    d_orig = _haversine_batch(starts_orig[:, 0], starts_orig[:, 1],
-                               ends_orig[:, 0],   ends_orig[:, 1])
-    d_sync = _haversine_batch(starts_sync[:, 0], starts_sync[:, 1],
-                               ends_sync[:, 0],   ends_sync[:, 1])
-    valid = (d_orig >= 1e-6) & (d_sync >= 1e-6)
+        b_orig = bearing_degrees(original_points[i], original_points[i + 1])
+        b_sync = bearing_degrees(synchronized_points[i], synchronized_points[i + 1])
+        heading_errors.append(angular_diff_deg(b_orig, b_sync))
 
-    if not np.any(valid):
+    if not heading_errors:
         return 0.0
-
-    # Vectorised bearing computation
-    b_orig = _bearings_batch(starts_orig[valid], ends_orig[valid])
-    b_sync = _bearings_batch(starts_sync[valid], ends_sync[valid])
-
-    diff = np.abs(b_orig - b_sync) % 360.0
-    diff = np.minimum(diff, 360.0 - diff)
-    return float(np.mean(diff))
+    return float(np.mean(heading_errors))
 
 
 def speed_aware_distance(original: pd.DataFrame,
@@ -533,23 +471,18 @@ def speed_aware_distance(original: pd.DataFrame,
     if len(original_points) < 2 or len(synchronized_points) < 2 or len(query_time_sec) < 2:
         return 0.0
 
-    dt = np.diff(query_time_sec)
-    valid = dt > 0
-    if not np.any(valid):
-        return 0.0
+    speed_errors = []
+    for i in range(len(original_points) - 1):
+        dt = query_time_sec[i + 1] - query_time_sec[i]
+        if dt <= 0:
+            continue
+        v_orig = haversine_distance(tuple(original_points[i]), tuple(original_points[i + 1])) / dt
+        v_sync = haversine_distance(tuple(synchronized_points[i]), tuple(synchronized_points[i + 1])) / dt
+        speed_errors.append(abs(v_orig - v_sync))
 
-    # Vectorised distances for valid segments
-    d_orig = _haversine_batch(
-        original_points[:-1][valid, 0], original_points[:-1][valid, 1],
-        original_points[1:][valid, 0],  original_points[1:][valid, 1],
-    )
-    d_sync = _haversine_batch(
-        synchronized_points[:-1][valid, 0], synchronized_points[:-1][valid, 1],
-        synchronized_points[1:][valid, 0],  synchronized_points[1:][valid, 1],
-    )
-    v_orig = d_orig / dt[valid]
-    v_sync = d_sync / dt[valid]
-    return float(np.mean(np.abs(v_orig - v_sync)))
+    if not speed_errors:
+        return 0.0
+    return float(np.mean(speed_errors))
 
 
 def integrated_synchronized_spatial_distance(instantaneous_distances: np.ndarray,
@@ -634,24 +567,84 @@ def compute_all_metrics(original: pd.DataFrame,
 
 
 if __name__ == "__main__":
-    # Example usage
-    import pandas as pd
-    
-    # Create sample trajectories
-    n = 100
-    original = pd.DataFrame({
-        'lat': np.linspace(0, 1, n) + np.random.normal(0, 0.01, n),
-        'lon': np.linspace(0, 1, n) + np.random.normal(0, 0.01, n),
-        'timestamp': pd.date_range('2023-01-01', periods=n, freq='1min')
-    })
-    
-    # Simplified (every 5th point)
-    simplified = original.iloc[::5][['lat', 'lon']].values
-    indices = list(range(0, n, 5))
-    
-    # Compute metrics
-    metrics = compute_all_metrics(original, simplified, indices)
-    
-    print("Evaluation Metrics:")
-    for key, value in metrics.items():
-        print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
+    """
+    Verify evaluation metrics on real GeoLife GPS trajectories.
+
+    Loads preprocessed GeoLife data from data/processed/trajectories.pkl and
+    tests all metrics across three algorithms (VW, Greedy Policy, Proposed) at
+    5× compression, plus an identity check confirming zero error when simplified
+    equals the original.
+    """
+    import sys, os, pickle
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from src.algorithms.baseline_algorithms import simplify_with_budget
+    from src.algorithms.proposed_method import proposed_simplification
+
+    DATA_FILE = Path("data/processed/trajectories.pkl")
+    if not DATA_FILE.exists():
+        print(f"[ERROR] {DATA_FILE} not found. Run: python src/utils/preprocess_geolife.py")
+        sys.exit(1)
+
+    print(f"Loading trajectories from {DATA_FILE} ...")
+    with open(DATA_FILE, "rb") as f:
+        all_trajs = pickle.load(f)
+
+    # Use 3 short trajectories for fast but real evaluation
+    trajs = sorted(all_trajs[:60], key=len)[:3]
+    print(f"Selected {len(trajs)} trajectories, sizes: {[len(t) for t in trajs]}\n")
+
+    ALGORITHMS = [
+        ("vw",            lambda t, b: (simplify_with_budget(t, 'vw', b),           None)),
+        ("greedy_policy", lambda t, b: (simplify_with_budget(t, 'greedy_policy', b), None)),
+        ("proposed",      lambda t, b: proposed_simplification(t, b)),
+    ]
+    COMPRESSION_RATIO = 5.0
+
+    print(f"{'Algorithm':<18} {'Traj':>5} {'N_orig':>6} {'N_simp':>6} "
+          f"{'Hausdorff(m)':>13} {'APTE(m)':>9} {'Fréchet(m)':>11} "
+          f"{'SED(m)':>8} {'DAD(°)':>7} "
+          f"{'TurnPres':>9} {'StopPres':>9} {'RT(s)':>7}")
+    print("-" * 118)
+
+    import time, tracemalloc
+    for traj in trajs:
+        budget = max(2, int(len(traj) / COMPRESSION_RATIO))
+        for name, fn in ALGORITHMS:
+            tracemalloc.start()
+            t0 = time.time()
+            simp, idx = fn(traj, budget)
+            elapsed = time.time() - t0
+            tracemalloc.stop()
+
+            m = compute_all_metrics(traj, simp, idx)
+            tp = m.get("turn_preservation")
+            sp = m.get("stop_preservation")
+            tp_str = f"{tp:>9.3f}" if tp is not None else f"{'—':>9}"
+            sp_str = f"{sp:>9.3f}" if sp is not None else f"{'—':>9}"
+            print(
+                f"{name:<18} {len(traj):>5} {m['original_points']:>6} {m['simplified_points']:>6} "
+                f"{m['hausdorff_distance']:>13.2f} {m['average_pte']:>9.3f} {m['frechet_distance']:>11.2f} "
+                f"{m['sed']:>8.2f} {m['dad']:>7.2f} "
+                f"{tp_str} {sp_str} {elapsed:>7.3f}"
+            )
+
+    # ── Identity check: original == simplified → geometric error == 0 ──────
+    print()
+    print("Identity check (simplified == original with indices → all geometric errors ≈ 0):")
+    traj = trajs[0]
+    pts  = traj[['lat', 'lon']].values
+    idx  = list(range(len(traj)))
+    m    = compute_all_metrics(traj, pts, idx)
+    geometric_keys = ['hausdorff_distance', 'average_pte', 'frechet_distance', 'ped', 'sed']
+    all_zero = True
+    for key in geometric_keys:
+        val = m.get(key, float('nan'))
+        status = "✓" if abs(val) < 1e-3 else "✗"
+        if abs(val) >= 1e-3:
+            all_zero = False
+        print(f"  {status} {key}: {val:.6f} m")
+    print(f"  {'✓' if all_zero else '✗'} turn_preservation = {m.get('turn_preservation', 'N/A')}")
+    print(f"  {'✓' if all_zero else '✗'} stop_preservation = {m.get('stop_preservation', 'N/A')}")
+

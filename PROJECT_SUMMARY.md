@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a complete MSc (15 credit) research project on trajectory simplification, focusing on preserving semantic features (turns, stops, speed changes) under irregular sampling and noise conditions.
+This is a research project on trajectory simplification, focusing on preserving semantic features (turns, stops, speed changes) under irregular sampling and noise conditions.
 
 ## Deliverables Checklist
 
@@ -16,8 +16,10 @@ This is a complete MSc (15 credit) research project on trajectory simplification
 ### ✅ PHASE 2: Baseline Algorithms
 - [x] Douglas-Peucker (DP) implementation
 - [x] Sliding Window (SW) implementation
-- [x] Uniform Sampling (US) implementation
-- [x] Adaptive Threshold (AT) method
+- [x] Visvalingam–Whyatt (VW) implementation
+- [x] Reumann–Witkam (RW) implementation
+- [x] SQUISH implementation
+- [x] **Greedy Policy (RL-inspired)** – training-free approximation of Wang et al. 2021
 - [x] Budget-constrained versions of all algorithms
 - [x] Complexity analysis and documentation
 - [x] Code in `src/algorithms/baseline_algorithms.py`
@@ -41,19 +43,22 @@ This is a complete MSc (15 credit) research project on trajectory simplification
 - [x] Documentation in `reports/05_metrics.md`
 
 ### ✅ PHASE 5: Experiment Pipeline
-- [x] Batch experiment runner
+- [x] Batch experiment runner (7 simplification algorithms, 4 compression ratios)
 - [x] Multiple compression ratios support
-- [x] Runtime and memory measurement
+- [x] Runtime, memory, and **throughput (traj/s)** measurement
 - [x] Automatic results table generation
 - [x] Code in `src/experiments/run_experiments.py`
-- [x] Configuration file support
+- [x] CLI experiment runner; defaults mirrored in `src/utils/config.py` and `config/experiment_config.yaml`
+- [x] Results at `results/experiment_results.csv`
 
 ### ✅ PHASE 6: Visualization
-- [x] Original vs simplified trajectory plots
-- [x] Compression vs error curves
-- [x] Runtime vs size plots
-- [x] Metric comparison charts
+- [x] Original vs simplified trajectory plots → `results/figures/trajectory_comparison.png`
+- [x] Compression vs error curves → `results/figures/compression_error_curves.png`
+- [x] Runtime vs size plots → `results/figures/runtime_scalability.png`
+- [x] Metric comparison charts → `results/figures/metric_comparison_5x.png`, `metric_comparison_10x.png`
+- [x] Dataset characterisation plots → `results/figures/dataset_*.png`
 - [x] Code in `src/experiments/generate_plots.py`
+- [x] **Dataset plot script**: `src/experiments/generate_dataset_plots.py`
 
 ### ✅ PHASE 7: Scalability Study
 - [x] Synthetic trajectory generator
@@ -104,7 +109,7 @@ CSIT-8-PROJECT/
 │   └── experiments/          # Experiment runners
 ├── notebooks/                # Jupyter notebooks
 ├── results/                  # Results (generated)
-├── reports/                  # Thesis sections
+├── reports/                  # Thesis sections + MASTER_EXAM_REPORT.md (complete project report)
 ├── config/                   # Configuration files
 ├── requirements.txt          # Dependencies
 ├── README.md                 # Main documentation
@@ -123,29 +128,43 @@ CSIT-8-PROJECT/
 
 ## Quick Start
 
-1. Install dependencies: `pip install -r requirements.txt`
-2. (Optional) Download GeoLife dataset to `data/geolife/`
-3. Preprocess: `python src/utils/preprocess_geolife.py`
-4. Run experiments: `python src/experiments/run_experiments.py`
-5. Generate plots: `python src/experiments/generate_plots.py`
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Preprocess GeoLife data
+python src/utils/preprocess_geolife.py
+
+# 3. Run experiments (fast algorithms, 10 trajectories)
+python src/experiments/run_experiments.py \
+  --max-trajectories 10 \
+  --algorithms vw squish rw greedy_policy proposed
+
+# 4. Generate all comparison plots
+python src/experiments/generate_plots.py
+
+# 5. Generate dataset characterisation plots
+python src/experiments/generate_dataset_plots.py
+
+```
 
 See `QUICKSTART.md` for detailed instructions.
 
-## Next Steps
+## Current Status
 
-1. **Download Dataset**: Get GeoLife dataset if you want to use real GPS data
-2. **Run Experiments**: Execute the experiment pipeline to generate results
-3. **Fill in Results**: Update report sections with actual experimental results
-4. **Customize**: Adjust parameters, add algorithms, or extend metrics as needed
-5. **Prepare Defense**: Review viva preparation guide and practice answers
+All report sections contain **real experimental results** from the GeoLife dataset:
+- `results/experiment_results.csv` — benchmark rows (e.g. 240 = 10 trajs × 6 algos × 4 CRs when using the fast six-pack CLI)
+- `results/figures/*.png` — 9 figures generated from real data
+- All "X" placeholders in reports replaced with actual values
 
 ## Notes
 
-- All code is executable and tested
-- Report sections are templates - fill in actual results after running experiments
-- Configuration files allow easy parameter adjustment
-- Synthetic data generator allows testing without real dataset
-- Code follows Python best practices with docstrings and type hints
+- All code is executable and tested on real GeoLife data
+- Report sections contain actual experimental results (not templates)
+- The RL-inspired Greedy Policy baseline is included as `greedy_policy` algorithm
+- Throughput (trajectories/second) is now measured in all experiments
+- Turn/stop preservation in batch CSV is computed for **proposed** only (indices not exported for baselines)
+- Uniform sampling and adaptive-threshold baselines were removed; configuration lives in `src/utils/config.py`
 
 ## Support
 

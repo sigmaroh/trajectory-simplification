@@ -17,15 +17,15 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.experiments.visualize_osm import (  # noqa: E402
     ALGORITHM_COLORS,
-    _downsample_path,
-    _extract_latlon,
-    _sample_indices,
-    _simplify_trajectory,
+    downsample_path,
+    extract_latlon,
+    sample_indices,
+    simplify_trajectory,
 )
 from src.metrics.evaluation_metrics import compute_all_metrics  # noqa: E402
 
 
-def _prepare_map_data(
+def prepare_map_data(
     trajectories_file: str,
     algorithms: Sequence[str],
     compression_ratios: Sequence[float],
@@ -38,7 +38,7 @@ def _prepare_map_data(
     if not isinstance(trajectories, list) or len(trajectories) == 0:
         raise ValueError("Trajectory file is empty or invalid.")
 
-    selected_ids = _sample_indices(len(trajectories), max_trajectories)
+    selected_ids = sample_indices(len(trajectories), max_trajectories)
     selected_pairs = [(idx, trajectories[idx]) for idx in selected_ids]
 
     valid_pairs = []
@@ -47,7 +47,7 @@ def _prepare_map_data(
         if not isinstance(traj, pd.DataFrame) or len(traj) < 2:
             continue
         try:
-            lat_values, lon_values = _extract_latlon(traj)
+            lat_values, lon_values = extract_latlon(traj)
         except ValueError:
             continue
         finite_mask = np.isfinite(lat_values) & np.isfinite(lon_values)
@@ -81,10 +81,10 @@ def _prepare_map_data(
             for algorithm in algorithms:
                 algo_key = algorithm.lower().strip()
                 try:
-                    simplified = _simplify_trajectory(traj, algorithm, compression_ratio=ratio)
+                    simplified = simplify_trajectory(traj, algorithm, compression_ratio=ratio)
                     if simplified.shape[0] < 2:
                         continue
-                    path = _downsample_path(
+                    path = downsample_path(
                         simplified[:, 0],
                         simplified[:, 1],
                         max_points=max_points_per_trajectory,
@@ -111,6 +111,7 @@ def _prepare_map_data(
                                 "trajectory_id": traj_label,
                                 "algorithm": algorithm,
                                 "hausdorff_distance": metrics.get("hausdorff_distance"),
+                                "frechet_distance": metrics.get("frechet_distance"),
                                 "average_pte": metrics.get("average_pte"),
                                 "ped": metrics.get("ped"),
                                 "sed": metrics.get("sed"),
@@ -136,7 +137,7 @@ def _prepare_map_data(
     }
 
 
-def _render_html_template(json_filename: str, fallback_data: Dict) -> str:
+def render_html_template(json_filename: str, fallback_data: Dict) -> str:
     fallback_json = json.dumps(fallback_data, ensure_ascii=True)
     return f"""<!DOCTYPE html>
 <html>
@@ -189,6 +190,7 @@ def _render_html_template(json_filename: str, fallback_data: Dict) -> str:
           <th style="padding:4px 6px; text-align:left;">Traj</th>
           <th style="padding:4px 6px; text-align:left;">Algo</th>
           <th style="padding:4px 6px; text-align:right;">HD (m)</th>
+          <th style="padding:4px 6px; text-align:right;">Fréchet (m)</th>
           <th style="padding:4px 6px; text-align:right;">APTE (m)</th>
           <th style="padding:4px 6px; text-align:right;">PED (m)</th>
           <th style="padding:4px 6px; text-align:right;">SED (m)</th>
@@ -210,7 +212,8 @@ def _render_html_template(json_filename: str, fallback_data: Dict) -> str:
     const DATA_URL = "{json_filename}";
     const FALLBACK_DATA = {fallback_json};
     const algorithmDisplay = {{
-      original: "Original", dp: "DP", squish: "SQUISH", vw: "VW", sw: "SW", rw: "RW", proposed: "Proposed"
+      original: "Original", dp: "DP", squish: "SQUISH", vw: "VW", sw: "SW", rw: "RW",
+      greedy_policy: "Greedy Policy (RL)", proposed: "Proposed"
     }};
 
     function fmt(v) {{
@@ -344,6 +347,7 @@ def _render_html_template(json_filename: str, fallback_data: Dict) -> str:
             `<td style='padding:3px 6px;'>${{m.trajectory_id}}</td>` +
             `<td style='padding:3px 6px;'>${{m.algorithm}}</td>` +
             `<td style='padding:3px 6px; text-align:right;'>${{fmt(m.hausdorff_distance)}}</td>` +
+            `<td style='padding:3px 6px; text-align:right;'>${{fmt(m.frechet_distance)}}</td>` +
             `<td style='padding:3px 6px; text-align:right;'>${{fmt(m.average_pte)}}</td>` +
             `<td style='padding:3px 6px; text-align:right;'>${{fmt(m.ped)}}</td>` +
             `<td style='padding:3px 6px; text-align:right;'>${{fmt(m.sed)}}</td>` +
@@ -395,7 +399,7 @@ def export_json_and_html(
     max_trajectories: int,
     max_points_per_trajectory: int,
 ) -> None:
-    data = _prepare_map_data(
+    data = prepare_map_data(
         trajectories_file=trajectories_file,
         algorithms=algorithms,
         compression_ratios=compression_ratios,
@@ -409,7 +413,7 @@ def export_json_and_html(
     output_html_path.parent.mkdir(parents=True, exist_ok=True)
 
     output_json_path.write_text(json.dumps(data, ensure_ascii=True), encoding="utf-8")
-    html_content = _render_html_template(output_json_path.name, data)
+    html_content = render_html_template(output_json_path.name, data)
     output_html_path.write_text(html_content, encoding="utf-8")
 
     print(f"Saved JSON data to: {output_json_path}")
@@ -421,7 +425,7 @@ def main() -> None:
     parser.add_argument("--trajectories-file", type=str, default="data/processed/trajectories.pkl")
     parser.add_argument("--output-json", type=str, default="results/figures/trajectories_osm_comparison_data.json")
     parser.add_argument("--output-html", type=str, default="results/figures/trajectories_osm_comparison_from_json.html")
-    parser.add_argument("--algorithms", type=str, default="original,dp,squish,vw,sw,rw,proposed")
+    parser.add_argument("--algorithms", type=str, default="original,dp,vw,squish,rw,greedy_policy,proposed")
     parser.add_argument("--compression-ratios", type=str, default="2,5")
     parser.add_argument("--max-trajectories", type=int, default=1)
     parser.add_argument("--max-points-per-trajectory", type=int, default=1200)

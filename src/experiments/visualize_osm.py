@@ -37,13 +37,14 @@ ALGORITHM_COLORS = {
     "rw": "red",
     "reumann-witkam": "red",
     "reumann_witkam": "red",
-    "adaptive": "darkred",
-    "uniform": "cadetblue",
+    "greedy_policy": "darkpurple",
+    "greedy-policy": "darkpurple",
+    "rl_inspired": "darkpurple",
     "proposed": "black",
 }
 
 
-def _is_valid_latlon(lat_values: np.ndarray, lon_values: np.ndarray) -> bool:
+def is_valid_latlon(lat_values: np.ndarray, lon_values: np.ndarray) -> bool:
     """Check whether arrays look like valid latitude/longitude coordinates."""
     if len(lat_values) < 2 or len(lon_values) < 2:
         return False
@@ -61,7 +62,7 @@ def _is_valid_latlon(lat_values: np.ndarray, lon_values: np.ndarray) -> bool:
     return True
 
 
-def _extract_latlon(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+def extract_latlon(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     """Extract latitude and longitude arrays from a trajectory DataFrame."""
     column_pairs: Sequence[Tuple[str, str]] = (
         ("lat", "lon"),
@@ -74,22 +75,22 @@ def _extract_latlon(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
             continue
         lat_values = pd.to_numeric(df[lat_col], errors="coerce").to_numpy(dtype=float)
         lon_values = pd.to_numeric(df[lon_col], errors="coerce").to_numpy(dtype=float)
-        if _is_valid_latlon(lat_values, lon_values):
+        if is_valid_latlon(lat_values, lon_values):
             return lat_values, lon_values
-        if _is_valid_latlon(lon_values, lat_values):
+        if is_valid_latlon(lon_values, lat_values):
             return lon_values, lat_values
 
     raise ValueError("No valid latitude/longitude columns found.")
 
 
-def _sample_indices(total_count: int, max_items: int) -> List[int]:
+def sample_indices(total_count: int, max_items: int) -> List[int]:
     """Get evenly spaced indices to keep map rendering lightweight."""
     if total_count <= max_items:
         return list(range(total_count))
     return np.linspace(0, total_count - 1, max_items, dtype=int).tolist()
 
 
-def _downsample_path(lat_values: np.ndarray, lon_values: np.ndarray, max_points: int) -> List[Tuple[float, float]]:
+def downsample_path(lat_values: np.ndarray, lon_values: np.ndarray, max_points: int) -> List[Tuple[float, float]]:
     """Create a lat/lon path with at most max_points."""
     if len(lat_values) > max_points:
         keep = np.linspace(0, len(lat_values) - 1, max_points, dtype=int)
@@ -98,7 +99,7 @@ def _downsample_path(lat_values: np.ndarray, lon_values: np.ndarray, max_points:
     return list(zip(lat_values.tolist(), lon_values.tolist()))
 
 
-def _simplify_trajectory(
+def simplify_trajectory(
     trajectory: pd.DataFrame,
     algorithm: str,
     compression_ratio: float,
@@ -114,7 +115,7 @@ def _simplify_trajectory(
     return simplify_with_budget(trajectory, algorithm=algorithm, budget=budget)
 
 
-def _format_metric_value(value: float) -> str:
+def format_metric_value(value: float) -> str:
     """Format metric values for overlay display."""
     if value is None or not np.isfinite(value):
         return "-"
@@ -125,7 +126,7 @@ def _format_metric_value(value: float) -> str:
     return f"{value:.3f}"
 
 
-def _add_metrics_overlay(
+def add_metrics_overlay(
     fmap: folium.Map,
     metric_rows: Sequence[dict],
 ) -> None:
@@ -139,11 +140,12 @@ def _add_metrics_overlay(
         "proposed": "Proposed",
         "rdp": "DP",
         "sliding_window": "SW",
-        "uniform": "Uniform",
-        "adaptive": "Adaptive",
+        "greedy_policy": "Greedy Policy (RL)",
+        "greedy-policy": "Greedy Policy (RL)",
     }
     metric_columns = [
         ("hausdorff_distance", "HD (m)"),
+        ("frechet_distance", "Fréchet (m)"),
         ("average_pte", "APTE (m)"),
         ("ped", "PED (m)"),
         ("sed", "SED (m)"),
@@ -164,7 +166,7 @@ def _add_metrics_overlay(
         ]
         for metric_name, _ in metric_columns:
             row.append(
-                f"<td style='padding:3px 6px; text-align:right;'>{_format_metric_value(row_data.get(metric_name, np.nan))}</td>"
+                f"<td style='padding:3px 6px; text-align:right;'>{format_metric_value(row_data.get(metric_name, np.nan))}</td>"
             )
         layer_label = row_data.get("layer_label", "")
         rows_html.append(
@@ -407,7 +409,7 @@ def add_selection_controls_overlay(
     fmap.get_root().html.add_child(Element(controls_html))
 
 
-def _add_zoom_bottom_right(fmap: folium.Map) -> None:
+def add_zoom_bottom_right(fmap: folium.Map) -> None:
     """Place map zoom controls at bottom-right."""
     map_name = fmap.get_name()
     script = f"""
@@ -422,7 +424,7 @@ def _add_zoom_bottom_right(fmap: folium.Map) -> None:
     fmap.get_root().html.add_child(Element(script))
 
 
-def _add_algorithm_legend_overlay(
+def add_algorithm_legend_overlay(
     fmap: folium.Map,
     algorithms: Sequence[str],
 ) -> None:
@@ -434,6 +436,7 @@ def _add_algorithm_legend_overlay(
         "vw": "VW",
         "sw": "SW",
         "rw": "RW",
+        "greedy_policy": "Greedy Policy (RL)",
         "proposed": "Proposed",
     }
 
@@ -477,7 +480,7 @@ def _add_algorithm_legend_overlay(
     fmap.get_root().html.add_child(Element(legend_html))
 
 
-def _add_basemap_layers(fmap: folium.Map) -> None:
+def add_basemap_layers(fmap: folium.Map) -> None:
     """Add selectable basemap layers."""
     folium.TileLayer(
         tiles="OpenStreetMap",
@@ -523,7 +526,7 @@ def create_osm_map(
     if not isinstance(trajectories, list) or len(trajectories) == 0:
         raise ValueError("Trajectory file is empty or not a list of trajectories.")
 
-    selected_ids = _sample_indices(len(trajectories), max_trajectories)
+    selected_ids = sample_indices(len(trajectories), max_trajectories)
     selected_trajectories = [trajectories[i] for i in selected_ids]
 
     all_lat: List[float] = []
@@ -534,7 +537,7 @@ def create_osm_map(
         if not isinstance(traj, pd.DataFrame) or len(traj) < 2:
             continue
         try:
-            lat_values, lon_values = _extract_latlon(traj)
+            lat_values, lon_values = extract_latlon(traj)
         except ValueError:
             continue
 
@@ -562,7 +565,7 @@ def create_osm_map(
 
     center = [float(np.mean(all_lat)), float(np.mean(all_lon))]
     fmap = folium.Map(location=center, zoom_start=11, tiles=None, control_scale=True, zoom_control=False)
-    _add_basemap_layers(fmap)
+    add_basemap_layers(fmap)
 
     palette = [
         "blue", "red", "green", "purple", "orange", "darkred", "darkblue",
@@ -576,7 +579,7 @@ def create_osm_map(
 
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    _add_zoom_bottom_right(fmap)
+    add_zoom_bottom_right(fmap)
     fmap.save(str(output_path))
     return output_path
 
@@ -596,7 +599,7 @@ def create_osm_comparison_map(
     if not isinstance(trajectories, list) or len(trajectories) == 0:
         raise ValueError("Trajectory file is empty or not a list of trajectories.")
 
-    selected_ids = _sample_indices(len(trajectories), max_trajectories)
+    selected_ids = sample_indices(len(trajectories), max_trajectories)
     selected_pairs = [(idx, trajectories[idx]) for idx in selected_ids]
 
     centers: List[Tuple[float, float]] = []
@@ -606,7 +609,7 @@ def create_osm_comparison_map(
         if not isinstance(traj, pd.DataFrame) or len(traj) < 2:
             continue
         try:
-            lat_values, lon_values = _extract_latlon(traj)
+            lat_values, lon_values = extract_latlon(traj)
         except ValueError:
             continue
         finite_mask = np.isfinite(lat_values) & np.isfinite(lon_values)
@@ -629,7 +632,7 @@ def create_osm_comparison_map(
         control_scale=True,
         zoom_control=False,
     )
-    _add_basemap_layers(fmap)
+    add_basemap_layers(fmap)
 
     fallback_colors = ["darkblue", "darkpurple", "darkgreen", "darkred", "pink"]
 
@@ -653,10 +656,10 @@ def create_osm_comparison_map(
                     show=(ratio == default_ratio),
                 )
                 try:
-                    simplified = _simplify_trajectory(traj, algorithm, compression_ratio=ratio)
+                    simplified = simplify_trajectory(traj, algorithm, compression_ratio=ratio)
                     if simplified.shape[0] < 2:
                         continue
-                    path = _downsample_path(simplified[:, 0], simplified[:, 1], max_points=max_points_per_trajectory)
+                    path = downsample_path(simplified[:, 0], simplified[:, 1], max_points=max_points_per_trajectory)
                     color = ALGORITHM_COLORS.get(algorithm.lower(), fallback_colors[traj_index % len(fallback_colors)])
                     folium.PolyLine(
                         path,
@@ -682,6 +685,7 @@ def create_osm_comparison_map(
                             "algorithm": algorithm,
                             "layer_label": layer_name,
                             "hausdorff_distance": metrics.get("hausdorff_distance"),
+                            "frechet_distance": metrics.get("frechet_distance"),
                             "average_pte": metrics.get("average_pte"),
                             "ped": metrics.get("ped"),
                             "sed": metrics.get("sed"),
@@ -692,12 +696,12 @@ def create_osm_comparison_map(
                 except Exception:
                     continue
 
-    _add_metrics_overlay(fmap, metric_rows)
+    add_metrics_overlay(fmap, metric_rows)
     folium.LayerControl(position="topright", collapsed=False).add_to(fmap)
     trajectory_labels = [f"T{traj_id:04d}" for traj_id, _ in valid_pairs]
     add_selection_controls_overlay(fmap, compression_ratios, trajectory_labels)
-    _add_algorithm_legend_overlay(fmap, algorithms)
-    _add_zoom_bottom_right(fmap)
+    add_algorithm_legend_overlay(fmap, algorithms)
+    add_zoom_bottom_right(fmap)
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fmap.save(str(output_path))
@@ -738,7 +742,7 @@ def main() -> None:
     parser.add_argument(
         "--algorithms",
         type=str,
-        default="original,dp,squish,vw,sw,rw,proposed",
+        default="original,dp,vw,squish,rw,greedy_policy,proposed",
         help="Comma-separated algorithms for comparison map",
     )
     parser.add_argument(

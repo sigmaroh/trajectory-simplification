@@ -2,199 +2,222 @@
 
 ## Installation
 
-1. **Install Python dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+# Option A — use the bundled setup script
+./venv_setup.sh
+source venv/bin/activate
 
-2. **Download GeoLife Dataset** (Optional - you can use synthetic data for testing):
-   - Visit: https://www.microsoft.com/en-us/research/publication/geolife-gps-trajectory-dataset-user-guide/
-   - Extract to `data/geolife/Data/`
-   - Structure should be: `data/geolife/Data/000/Trajectory/*.plt`
+# Option B — manual
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-## Quick Test (Using Synthetic Data)
+---
 
-If you don't have the GeoLife dataset yet, you can test with synthetic data:
+## Quick Test (GeoLife Data Already Preprocessed)
+
+If `data/processed/trajectories.pkl` already exists, you can jump straight to experiments:
 
 ```python
-from src.utils.synthetic_generator import generate_synthetic_trajectory
+import pickle, sys
+sys.path.insert(0, '.')
+from src.algorithms.baseline_algorithms import simplify_with_budget
 from src.algorithms.proposed_method import proposed_simplification
 from src.metrics.evaluation_metrics import compute_all_metrics
-import pandas as pd
 
-# Generate synthetic trajectory
-traj = generate_synthetic_trajectory(200, irregular_sampling=True, include_turns=True, seed=42)
+with open('data/processed/trajectories.pkl', 'rb') as f:
+    trajectories = pickle.load(f)
 
-# Simplify with proposed method
-budget = 40  # 5x compression
-simplified, indices = proposed_simplification(traj, budget)
+traj = trajectories[0]
+budget = len(traj) // 5  # 5× compression
 
-# Evaluate
-metrics = compute_all_metrics(traj, simplified, indices)
-print("Metrics:", metrics)
+# Test Greedy Policy (RL-inspired)
+gp = simplify_with_budget(traj, 'greedy_policy', budget, alpha=0.5)
+print(f"Greedy Policy: {len(traj)} → {len(gp)} points")
+
+# Test Proposed method
+simp, idx = proposed_simplification(traj, budget)
+metrics = compute_all_metrics(traj, simp, idx)
+print(f"Proposed:      {len(traj)} → {len(simp)} points")
+print(f"Turn pres.: {metrics.get('turn_preservation', 'N/A'):.3f}  "
+      f"Stop pres.: {metrics.get('stop_preservation', 'N/A'):.3f}")
 ```
+
+---
 
 ## Full Workflow
 
-### Step 1: Preprocess Data (if using GeoLife)
+### Step 1 — Preprocess GeoLife Data
 
 ```bash
 python src/utils/preprocess_geolife.py
 ```
 
-This will:
-- Load trajectories from `data/geolife/`
-- Clean and preprocess
-- Save to `data/processed/trajectories.pkl`
+Outputs:
+- `data/processed/trajectories.pkl` — used by experiments
+- `data/processed/trajectory_properties.csv` — per-trajectory summary
+- `data/processed/trajectories_points.csv` — all GPS points (long CSV)
+- `data/processed/trajectories_index.csv` — trajectory index
 
-### Step 2: Run Experiments
+### Step 2 — Run Experiments
 
 ```bash
 python src/experiments/run_experiments.py \
-    --max-trajectories 20 \
-    --compression-ratios 2.0 5.0 10.0 \
-    --algorithms original dp squish vw sw rw proposed
+    --max-trajectories 10 \
+    --compression-ratios 2.0 5.0 10.0 20.0 \
+    --algorithms dp vw squish rw greedy_policy proposed \
+    --data-file data/processed/trajectories.pkl
 ```
 
-This will:
-- Run all algorithms on trajectories
-- Test multiple compression ratios
-- Compute all metrics
-- Save results to `results/experiment_results.csv`
+Outputs: `results/experiment_results.csv`, `results/summary_table.csv`
 
-### Step 3: Generate Visualizations
+> **Semantic metrics**: Turn/stop columns are filled for **proposed** rows only in the batch runner (baselines do not return selected indices).
+
+> **Note on speed**: `dp` and `sw` are slow on long trajectories (O(n²) binary search).
+> Omit them or limit `--max-trajectories 5` for a faster run.
+
+### Step 3 — Generate Dataset Analysis Plots
 
 ```bash
-python src/experiments/generate_plots.py
+python src/experiments/generate_dataset_plots.py \
+    --data-file data/processed/trajectories.pkl \
+    --max-trajectories 300
 ```
 
-This will generate:
-- Trajectory comparison plots
-- Compression vs error curves
-- Runtime scalability plots
-- Metric comparison charts
+Outputs in `results/figures/`:
+- `dataset_length_distribution.png`
+- `dataset_sampling_irregularity.png`
+- `dataset_speed.png`
+- `dataset_turns_stops.png`
 
-### Step 4: Analyze Results
+### Step 4 — Generate Algorithm Comparison Plots
 
-Open `results/experiment_results.csv` and `results/summary_table.csv` to analyze results.
+```bash
+python src/experiments/generate_plots.py \
+    --results-file results/experiment_results.csv \
+    --trajectories-file data/processed/trajectories.pkl \
+    --output-dir results/figures
+```
 
-Or use the Jupyter notebook:
+Outputs in `results/figures/`:
+- `trajectory_comparison.png` — DP, VW, RW, Greedy Policy, Proposed side-by-side
+- `compression_error_curves.png` — error vs compression ratio
+- `runtime_scalability.png` — runtime vs trajectory size
+- `metric_comparison_5x.png`, `metric_comparison_10x.png`
+
+### Step 5 — Generate Interactive OSM Map
+
+```bash
+# Lightweight JSON + HTML viewer (recommended)
+python src/experiments/export_osm_json_map.py \
+    --algorithms "original,dp,vw,squish,rw,greedy_policy,proposed" \
+    --compression-ratios "5,10" \
+    --max-trajectories 1
+
+# Full Folium comparison map
+python src/experiments/visualize_osm.py \
+    --comparison \
+    --algorithms "original,dp,vw,squish,rw,greedy_policy,proposed" \
+    --compression-ratios "5,10" \
+    --max-trajectories 1 \
+    --output-file results/figures/trajectories_osm_comparison.html
+```
+
+### Step 6 — Dataset Analysis Notebook
+
 ```bash
 jupyter notebook notebooks/01_dataset_analysis.ipynb
 ```
 
-## Project Structure Overview
+---
 
-- **`src/algorithms/`**: All simplification algorithms
-- **`src/metrics/`**: Evaluation metrics
-- **`src/utils/`**: Data loading, preprocessing, synthetic generation
-- **`src/experiments/`**: Experiment runners and visualization
-- **`notebooks/`**: Jupyter notebooks for analysis
-- **`reports/`**: Thesis/report sections
-- **`config/`**: Configuration files
+## Project Structure at a Glance
 
-## Key Files
+```
+src/algorithms/baseline_algorithms.py  ← DP, SW, VW, SQUISH, RW, Greedy Policy
+src/utils/config.py                    ← Central constants & experiment defaults
+src/algorithms/proposed_method.py      ← Proposed turn/stop/speed-aware method
+src/metrics/evaluation_metrics.py      ← All metrics (geometric + semantic)
+src/experiments/run_experiments.py     ← Main batch experiment runner
+src/experiments/generate_plots.py      ← Algorithm comparison plots
+src/experiments/generate_dataset_plots.py  ← Dataset characterisation plots
+src/experiments/visualize_osm.py       ← Folium OSM interactive map
+src/experiments/export_osm_json_map.py ← Lightweight JSON/HTML map
+config/experiment_config.yaml          ← Reference copy of experiment defaults
+```
 
-- **`src/algorithms/baseline_algorithms.py`**: Original passthrough, DP, SQUISH, VW, SW, RW (+ aliases)
-- **`src/algorithms/proposed_method.py`**: Our proposed turn/speed/stop-aware method
-- **`src/metrics/evaluation_metrics.py`**: All evaluation metrics
-- **`src/experiments/run_experiments.py`**: Main experiment runner
-- **`src/experiments/generate_plots.py`**: Visualization generator
+---
 
-## Common Tasks
+## Common Snippets
 
 ### Test a Single Algorithm
 
 ```python
+import pickle, sys
+sys.path.insert(0, '.')
 from src.algorithms.baseline_algorithms import simplify_with_budget
-import pandas as pd
 
-# Load trajectory
-traj = pd.read_pickle('data/processed/trajectories.pkl')[0]
+with open('data/processed/trajectories.pkl', 'rb') as f:
+    trajs = pickle.load(f)
+traj = trajs[0]
+budget = len(traj) // 5
 
-# Simplify with Douglas-Peucker (DP alias)
-budget = len(traj) // 5  # 5x compression
-simplified = simplify_with_budget(traj, 'dp', budget)
-print(f"Simplified from {len(traj)} to {len(simplified)} points")
+for algo in ['dp', 'vw', 'rw', 'greedy_policy']:
+    simp = simplify_with_budget(traj, algo, budget)
+    print(f"{algo:15s}: {len(traj)} → {len(simp)} pts")
 ```
 
 ### Compare Algorithms Visually
 
 ```python
 from src.experiments.generate_plots import plot_trajectory_comparison
-import pickle
+import pickle, matplotlib
+matplotlib.use('Agg')
 
-# Load trajectory
 with open('data/processed/trajectories.pkl', 'rb') as f:
-    trajectories = pickle.load(f)
+    trajs = pickle.load(f)
 
-traj = trajectories[0]
-
-# Plot comparison
 plot_trajectory_comparison(
-    traj,
-    ['dp', 'squish', 'vw', 'sw', 'rw'],
+    trajs[0],
+    ['dp', 'vw', 'rw', 'greedy_policy', 'proposed'],
     compression_ratio=5.0,
-    output_path='comparison.png'
+    output_path='my_comparison.png'
 )
 ```
 
-### Run Scalability Test
 
-```python
-from src.utils.synthetic_generator import scalability_test
-
-results = scalability_test(
-    algorithms=['dp', 'squish', 'vw', 'sw', 'rw', 'proposed'],
-    trajectory_sizes=[100, 200, 500, 1000, 2000],
-    compression_ratio=5.0
-)
-
-print(results.groupby(['algorithm', 'trajectory_size'])['runtime_seconds'].mean())
-```
+---
 
 ## Troubleshooting
 
 ### Import Errors
 
-If you get import errors, make sure you're running from the project root:
+Run from the project root:
 ```bash
-cd /home/sanjay/Desktop/CSIT-8-PROJECT
+cd /home/sanjay/Desktop/DESKALL/CSIT-8-PROJECT
 python src/experiments/run_experiments.py
 ```
 
-Or add the project root to Python path:
-```python
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent))
+### DP / SW Are Very Slow
+
+For long GeoLife trajectories, DP uses binary search (O(n²) worst case). Use the fast subset:
+```bash
+python src/experiments/run_experiments.py \
+    --algorithms vw squish rw greedy_policy proposed \
+    --max-trajectories 10
 ```
 
 ### Memory Issues
 
-If you run out of memory:
-- Reduce `--max-trajectories`
-- Use smaller compression ratios
-- Process trajectories in batches
+```bash
+python src/experiments/run_experiments.py --max-trajectories 5
+```
 
-### Slow Execution
+### Externally Managed Python (no pip install)
 
-For faster testing:
-- Use fewer trajectories (`--max-trajectories 5`)
-- Use fewer compression ratios
-- Skip expensive metrics (Frechet distance)
-
-## Next Steps
-
-1. Read the full README.md for detailed documentation
-2. Review report sections in `reports/` for thesis content
-3. Check `reports/10_viva_preparation.md` for defense preparation
-4. Review `reports/11_reproducibility.md` for reproducibility guidelines
-
-## Getting Help
-
-- Check code docstrings for function documentation
-- Review report sections for methodology explanations
-- Test on small examples first
-- Check error messages carefully
-
+Use the bundled venv:
+```bash
+./venv_setup.sh
+venv/bin/python src/experiments/run_experiments.py ...
+```

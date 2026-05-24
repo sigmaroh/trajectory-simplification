@@ -11,15 +11,15 @@ Summary tables typically show mean and standard deviation of metrics across mult
 3. **Statistical Significance**: If available, check p-values or confidence intervals
 4. **Compression Ratio Trends**: Observe how metrics change with compression ratio
 
-**Example Interpretation**:
+**Example Interpretation** (illustrative — in the shipped pipeline, **turn/stop columns are populated only for `proposed`**):
 ```
 Algorithm    | Hausdorff (m) | Turn Preservation
 -------------|--------------|------------------
-DP           | 15.2 ± 3.1   | 0.45 ± 0.12
+DP           | 15.2 ± 3.1   | (not computed)
 Proposed     | 18.5 ± 4.2   | 0.82 ± 0.08
 ```
 
-Interpretation: Proposed method has slightly higher geometric error (18.5 vs 15.2) but much better turn preservation (0.82 vs 0.45). This is expected as the method prioritizes semantic features.
+Interpretation: Proposed method may accept slightly higher geometric error (18.5 vs 15.2 m Hausdorff) while achieving high turn preservation (0.82) because it explicitly scores turns and stops. Baselines optimise geometry or motion only; do not read empty or missing turn columns as “0% preservation”.
 
 ### 9.1.2 Detailed Results Tables
 

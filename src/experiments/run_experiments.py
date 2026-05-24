@@ -96,6 +96,9 @@ class ExperimentRunner:
             # Compute metrics
             metrics = compute_all_metrics(trajectory, simplified, indices)
             
+            # Throughput: trajectories processed per second
+            throughput = 1.0 / runtime if runtime > 0 else float('inf')
+
             # Add experiment metadata
             result = {
                 'algorithm': algorithm,
@@ -103,6 +106,7 @@ class ExperimentRunner:
                 'budget': budget,
                 'runtime_seconds': runtime,
                 'memory_mb': memory_mb,
+                'throughput_traj_per_sec': throughput,
                 **metrics
             }
             
@@ -192,7 +196,8 @@ class ExperimentRunner:
         summary_cols = [
             'hausdorff_distance', 'average_pte', 'frechet_distance',
             'ped', 'dad', 'sed', 'sad', 'issd',
-            'turn_preservation', 'stop_preservation', 'runtime_seconds', 'memory_mb'
+            'turn_preservation', 'stop_preservation',
+            'runtime_seconds', 'memory_mb', 'throughput_traj_per_sec'
         ]
         
         # Filter to available columns
@@ -221,7 +226,7 @@ def main():
                        default=[2.0, 5.0, 10.0, 20.0],
                        help='Compression ratios to test')
     parser.add_argument('--algorithms', type=str, nargs='+',
-                       default=['original', 'dp', 'squish', 'vw', 'sw', 'rw', 'proposed'],
+                       default=['original', 'dp', 'squish', 'vw', 'sw', 'rw', 'greedy_policy', 'proposed'],
                        help='Algorithms to test')
     parser.add_argument('--data-file', type=str,
                        default='data/processed/trajectories.pkl',
@@ -241,7 +246,7 @@ def main():
     
     # Algorithm parameters
     algorithm_params = {
-        'adaptive': {'base_epsilon': 10.0, 'speed_weight': 0.5},
+        'greedy_policy': {'alpha': 0.5},
         'proposed': {'weights': {'turn': 0.3, 'stop': 0.3, 'speed': 0.2, 'irregular': 0.2}}
     }
     

@@ -1,349 +1,157 @@
-# PHASE 11: Reproducibility
+# 11. Reproducibility
 
-## 11.1 Folder Structure
+## 11.1 Complete File Structure
 
 ```
 CSIT-8-PROJECT/
 ├── data/
-│   ├── geolife/              # Raw GeoLife dataset
-│   │   └── Data/             # User folders with .plt files
-│   └── processed/            # Preprocessed trajectories
-│       ├── trajectories.pkl
-│       └── trajectory_properties.csv
+│   ├── geolife/                          # Raw GeoLife dataset (.plt files)
+│   │   └── Data/<user_id>/Trajectory/
+│   └── processed/
+│       ├── trajectories.pkl              # List of cleaned trajectory DataFrames (primary input for experiments)
+│       ├── trajectory_properties.csv     # Per-trajectory summary statistics
+│       ├── trajectories_points.csv       # All GPS points (long format, from preprocessing)
+│       └── trajectories_index.csv        # One row per trajectory (id, user, file, num_points)
 ├── src/
-│   ├── algorithms/           # Simplification algorithms
-│   │   ├── baseline_algorithms.py
-│   │   └── proposed_method.py
-│   ├── metrics/             # Evaluation metrics
-│   │   └── evaluation_metrics.py
-│   ├── utils/               # Utility functions
+│   ├── algorithms/
+│   │   ├── baseline_algorithms.py        # DP, SW, VW, SQUISH, RW, Greedy Policy
+│   │   └── proposed_method.py            # Turn/Stop/Speed/Irregularity-aware method
+│   ├── metrics/
+│   │   └── evaluation_metrics.py         # Geometric, time-sync, semantic metrics
+│   ├── utils/
+│   │   ├── config.py                     # Central constants + EXPERIMENTS dict
 │   │   ├── geolife_loader.py
-│   │   ├── preprocess_geolife.py
-│   │   └── synthetic_generator.py
-│   └── experiments/         # Experiment runners
-│       ├── run_experiments.py
-│       └── generate_plots.py
-├── notebooks/               # Jupyter notebooks
-│   └── 01_dataset_analysis.ipynb
+│   │   └── preprocess_geolife.py         # CLI: pickle + CSV export
+│   └── experiments/
+│       ├── run_experiments.py            # Main batch experiment runner (argparse)
+│       ├── generate_plots.py
+│       ├── generate_dataset_plots.py
+│       ├── visualize_osm.py              # Folium map (metrics incl. Fréchet)
+│       └── export_osm_json_map.py        # JSON + HTML viewer (metrics incl. Fréchet)
+├── config/
+│   └── experiment_config.yaml            # Mirror of experiment defaults (reference)
 ├── results/
-│   ├── figures/             # Generated plots
-│   └── tables/              # Result tables
-│       ├── experiment_results.csv
-│       └── summary_table.csv
-├── reports/                 # Thesis/report sections
-│   ├── 01_introduction.md
-│   ├── 02_related_work.md
-│   ├── ...
-│   └── 11_reproducibility.md
-├── config/                  # Configuration files
-│   └── experiment_config.yaml
-├── requirements.txt         # Python dependencies
-├── README.md               # Project overview
-└── .gitignore             # Git ignore file
+│   ├── experiment_results.csv
+│   ├── summary_table.csv
+│   └── figures/
+│       ├── metric_comparison_5x.png      # Note: integer "5x", not "5.0x"
+│       ├── metric_comparison_10x.png
+│       └── trajectories_osm_comparison.html
+├── reports/                              # Thesis chapters (this folder)
+├── requirements.txt
+└── venv_setup.sh
 ```
 
-## 11.2 Notebook Layout
+---
 
-### 11.2.1 Dataset Analysis Notebook
+## 11.2 Configuration
 
-`notebooks/01_dataset_analysis.ipynb`:
-- Load and visualize trajectories
-- Compute trajectory properties
-- Analyze sampling irregularity
-- Plot examples
-
-### 11.2.2 Experiment Notebooks (Optional)
-
-Additional notebooks can be created for:
-- Algorithm comparison
-- Parameter sensitivity analysis
-- Case studies
-
-## 11.3 Experiment Configuration
-
-### 11.3.1 Configuration File
-
-Create `config/experiment_config.yaml`:
-
-```yaml
-experiments:
-  max_trajectories: 50
-  compression_ratios: [2.0, 5.0, 10.0, 20.0]
-  algorithms:
-    - original
-    - dp
-    - squish
-    - vw
-    - sw
-    - rw
-    - proposed
-  
-  algorithm_params:
-    adaptive:
-      base_epsilon: 10.0
-      speed_weight: 0.5
-    proposed:
-      weights:
-        turn: 0.3
-        stop: 0.3
-        speed: 0.2
-        irregular: 0.2
-
-dataset:
-  data_file: "data/processed/trajectories.pkl"
-  min_points: 100
-  max_points: 5000
-
-output:
-  results_dir: "results"
-  figures_dir: "results/figures"
-  tables_dir: "results/tables"
-```
-
-### 11.3.2 Using Configuration
+**Primary source**: `src/utils/config.py` — physics thresholds, binary-search settings, plot defaults, and:
 
 ```python
-import yaml
-
-with open('config/experiment_config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-# Use config in experiments
-max_trajectories = config['experiments']['max_trajectories']
-compression_ratios = config['experiments']['compression_ratios']
-```
-
-## 11.4 Seed Control
-
-### 11.4.1 Setting Seeds
-
-Always set random seeds for reproducibility:
-
-```python
-import numpy as np
-import random
-
-# Set seeds
+EXPERIMENTS = {
+    "max_trajectories": 50,
+    "compression_ratios": [2.0, 5.0, 10.0, 20.0],
+    "algorithms": ["original", "dp", "squish", "vw", "sw", "rw", "greedy_policy", "proposed"],
+    ...
+}
 SEED = 42
-np.random.seed(SEED)
-random.seed(SEED)
-
-# For reproducibility, set seed at the start of each script
 ```
 
-### 11.4.2 Seed in Experiments
+**Reference copy**: `config/experiment_config.yaml` lists the same experiment names and parameters.
 
-```python
-# In run_experiments.py
-def main():
-    np.random.seed(42)
-    random.seed(42)
-    # ... rest of code
+**Important**: `src/experiments/run_experiments.py` reads defaults from **argparse**, not by loading YAML or importing `EXPERIMENTS` automatically. Thresholds used inside algorithms (e.g. `BINARY_SEARCH_*`, stop/turn degrees) are imported from `config.py` where referenced.
+
+---
+
+## 11.3 Step-by-Step Reproducibility Commands
+
+```bash
+cd /path/to/CSIT-8-PROJECT
+source venv/bin/activate
+pip install -r requirements.txt   # use venv on Ubuntu (PEP 668)
+
+# 1. Preprocess GeoLife → pickle + CSV
+python src/utils/preprocess_geolife.py --max-users 50
+
+# Optional: export CSV from existing pickle only
+python src/utils/preprocess_geolife.py --export-csv-only data/processed/trajectories.pkl
+
+# 2. Main experiments (240 rows when: 10 trajs × 6 algos below × 4 CRs)
+python src/experiments/run_experiments.py \
+  --max-trajectories 10 \
+  --compression-ratios 2.0 5.0 10.0 20.0 \
+  --algorithms dp vw squish rw greedy_policy proposed \
+  --data-file data/processed/trajectories.pkl
+
+# 3. Figures
+python src/experiments/generate_dataset_plots.py --data-file data/processed/trajectories.pkl
+python src/experiments/generate_plots.py \
+  --results-file results/experiment_results.csv \
+  --trajectories-file data/processed/trajectories.pkl
+
+# 4. Interactive OSM comparison map (includes Fréchet in metrics table)
+python src/experiments/visualize_osm.py \
+  --comparison \
+  --output-file results/figures/trajectories_osm_comparison.html \
+  --algorithms "original,dp,vw,squish,rw,greedy_policy,proposed" \
+  --compression-ratios "5,10" \
+  --max-trajectories 1
 ```
+
+---
+
+## 11.4 Determinism and Seeds
+
+- Simplification methods are **deterministic** given the same input trajectory and budget.
+- `SEED = 42` in `config.py` is for synthetic trajectories / notebooks; it does not alter the main GeoLife batch unless a script explicitly sets `numpy.random.seed(SEED)`.
+- Trajectory order in experiments follows the order in the pickle file (first *N* after preprocessing).
+
+---
 
 ## 11.5 Reproducibility Checklist
 
-### 11.5.1 Code Reproducibility
+### Code
+- [x] Algorithms implemented in `src/algorithms/`
+- [x] Metrics in `src/metrics/evaluation_metrics.py`
+- [x] `requirements.txt` pins dependencies (use project `venv/`)
+- [x] No ablation-study script in the current tree (removed from scope)
 
-- [ ] All random operations use fixed seeds
-- [ ] Code is well-documented with comments
-- [ ] Functions have docstrings explaining parameters
-- [ ] Version numbers for dependencies are specified
-- [ ] Code is organized and modular
+### Data
+- [x] GeoLife preprocessing documented in `preprocess_geolife.py`
+- [x] Outputs: `.pkl` + `trajectories_points.csv` + `trajectories_index.csv` + `trajectory_properties.csv`
 
-### 11.5.2 Data Reproducibility
+### Experiments
+- [x] Document exact CLI for row count you report
+- [x] Semantic columns meaningful for `proposed` only unless baselines return indices
 
-- [ ] Dataset source is documented
-- [ ] Preprocessing steps are clearly described
-- [ ] Preprocessed data is saved and versioned
-- [ ] Data loading is deterministic
+### Results
+- [x] Figures generated by scripts under `src/experiments/`
+- [x] OSM HTML metrics include **Fréchet (m)** alongside Hausdorff and others
 
-### 11.5.3 Experiment Reproducibility
+---
 
-- [ ] All parameters are documented
-- [ ] Configuration files are included
-- [ ] Experiment scripts are executable
-- [ ] Results are saved with timestamps/versions
-- [ ] Random seeds are set and documented
-
-### 11.5.4 Result Reproducibility
-
-- [ ] Results tables are saved
-- [ ] Plots are saved with code
-- [ ] Summary statistics are computed
-- [ ] Results match across runs
-
-## 11.6 Running Experiments
-
-### 11.6.1 Step-by-Step Execution
-
-1. **Setup Environment**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Download Dataset**:
-   - Download GeoLife dataset to `data/geolife/`
-   - Or use synthetic data for testing
-
-3. **Preprocess Data**:
-   ```bash
-   python src/utils/preprocess_geolife.py
-   ```
-
-4. **Run Experiments**:
-   ```bash
-   python src/experiments/run_experiments.py \
-       --max-trajectories 50 \
-       --compression-ratios 2.0 5.0 10.0 20.0 \
-       --algorithms original dp squish vw sw rw proposed
-   ```
-
-5. **Generate Plots**:
-   ```bash
-   python src/experiments/generate_plots.py
-   ```
-
-### 11.6.2 Expected Outputs
-
-After running experiments, you should have:
-
-- `results/experiment_results.csv`: Detailed results
-- `results/summary_table.csv`: Aggregated statistics
-- `results/figures/trajectory_comparison.png`: Trajectory visualizations
-- `results/figures/compression_error_curves.png`: Error curves
-- `results/figures/runtime_scalability.png`: Performance plots
-- `results/figures/metric_comparison_*.png`: Metric comparisons
-
-## 11.7 Version Control
-
-### 11.7.1 Git Setup
-
-```bash
-git init
-git add .
-git commit -m "Initial commit: Trajectory simplification project"
-```
-
-### 11.7.2 .gitignore
-
-Create `.gitignore`:
-
-```
-# Data files (too large for git)
-data/geolife/
-data/processed/*.pkl
-data/processed/*.csv
-
-# Results (regenerated)
-results/figures/*
-results/tables/*
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-```
-
-## 11.8 Documentation
-
-### 11.8.1 Code Documentation
-
-- All functions should have docstrings
-- Complex algorithms should have inline comments
-- Mathematical formulas should be explained
-
-### 11.8.2 README
-
-The README.md should include:
-- Project overview
-- Setup instructions
-- Usage examples
-- Dataset information
-- Citation information
-
-## 11.9 Testing
-
-### 11.9.1 Unit Tests (Optional)
-
-Create `tests/` directory with unit tests for key functions:
+## 11.6 Expected Output Verification
 
 ```python
-# tests/test_algorithms.py
-import unittest
-from src.algorithms.baseline_algorithms import douglas_peucker
+import pandas as pd, os
 
-class TestAlgorithms(unittest.TestCase):
-    def test_dp_basic(self):
-        # Test DP on simple trajectory
-        trajectory = ...
-        result = douglas_peucker(trajectory, epsilon=10.0)
-        self.assertLessEqual(len(result), len(trajectory))
+df = pd.read_csv("results/experiment_results.csv")
+expected_algos = {"dp", "vw", "squish", "rw", "greedy_policy", "proposed"}
+assert expected_algos.issubset(set(df["algorithm"].unique()))
+print(f"✓ {len(df)} experiment rows")
+
+prop = df[df["algorithm"] == "proposed"]
+assert prop["turn_preservation"].notna().any(), "Proposed should have turn_preservation"
+print(f"✓ Proposed turn_preservation mean: {prop['turn_preservation'].mean():.3f}")
+
+for fig in [
+    "trajectory_comparison.png",
+    "compression_error_curves.png",
+    "metric_comparison_5x.png",
+    "dataset_turns_stops.png",
+]:
+    path = f"results/figures/{fig}"
+    assert os.path.exists(path), f"Missing {path}"
+print("✓ Key figures present")
 ```
-
-### 11.9.2 Validation
-
-- Test on small examples first
-- Verify results make sense
-- Compare with known baselines
-- Check edge cases (very short trajectories, etc.)
-
-## 11.10 Sharing and Publication
-
-### 11.10.1 Code Repository
-
-- Use GitHub/GitLab for code sharing
-- Include clear README
-- Add license file
-- Tag releases
-
-### 11.10.2 Data Sharing
-
-- Provide dataset download instructions
-- Include preprocessing scripts
-- Document data format
-
-### 11.10.3 Paper/Report
-
-- Include reproducibility section
-- Provide code/data links
-- Document all parameters
-- Include example commands
-
-## 11.11 Troubleshooting
-
-### Common Issues
-
-1. **Import Errors**: Ensure all dependencies are installed and paths are correct
-2. **Memory Issues**: Reduce number of trajectories or use smaller subset
-3. **Slow Execution**: Use smaller compression ratios or fewer trajectories for testing
-4. **Missing Data**: Check dataset path and preprocessing
-
-### Getting Help
-
-- Check error messages carefully
-- Review code documentation
-- Test on small examples first
-- Verify data format
-

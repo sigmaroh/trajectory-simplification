@@ -36,54 +36,11 @@ Why it handles irregular sampling and noise better:
 import numpy as np
 import pandas as pd
 from typing import Union, Tuple, List, Dict
-from scipy import stats
-from src.algorithms.baseline_algorithms import haversine_distance, point_to_line_distance, _haversine_batch, _point_to_line_distance_batch
+from src.algorithms.baseline_algorithms import haversine_distance, point_to_line_distance
+from src.utils.config import STOP_SPEED_THRESHOLD_MS, MIN_STOP_DURATION_S
 
 
-# ---------------------------------------------------------------------------
-# Private vectorised helpers
-# ---------------------------------------------------------------------------
-
-def _timestamp_diffs_s(timestamps) -> np.ndarray:
-    """
-    Convert a timestamps array to an (n-1,) array of time differences in seconds.
-    Works for numpy datetime64 arrays, pandas DatetimeIndex, and integer arrays
-    (integers are treated as nanoseconds since epoch, matching pd.to_datetime behaviour).
-    """
-    ns = np.asarray(pd.to_datetime(timestamps), dtype='datetime64[ns]').astype(np.int64)
-    return np.diff(ns) * 1e-9  # nanoseconds → seconds
-
-
-def _compute_speeds(points: np.ndarray, timestamps) -> np.ndarray:
-    """
-    Compute per-point speed (m/s) using vectorised haversine + timestamp diffs.
-    Returns array of length n; speed[0] = 0.
-    Propagates previous speed for zero-duration intervals (matches original behaviour).
-    """
-    n = len(points)
-    if n < 2:
-        return np.zeros(n)
-
-    dists = _haversine_batch(
-        points[:-1, 0], points[:-1, 1],
-        points[1:,  0], points[1:,  1],
-    )
-    time_diffs = _timestamp_diffs_s(timestamps)
-
-    speeds = np.zeros(n)
-    valid = time_diffs > 0
-    speeds[1:] = np.where(valid, dists / np.where(valid, time_diffs, 1.0), 0.0)
-    for i in range(1, n):
-        if time_diffs[i - 1] <= 0:
-            speeds[i] = speeds[i - 1] if i > 1 else 0.0
-    return speeds
-
-
-# ---------------------------------------------------------------------------
-# Public scoring functions
-# ---------------------------------------------------------------------------
-
-def compute_turn_score(trajectory: pd.DataFrame,
+def compute_turn_score(trajectory: pd.DataFrame, 
                       window_size: int = 3) -> np.ndarray:
     """
     Compute turn significance score for each point.
@@ -104,15 +61,22 @@ def compute_turn_score(trajectory: pd.DataFrame,
     
     points = trajectory[['lat', 'lon']].values
     n = len(points)
-
-    # Vectorised bearing computation (replaces per-segment Python loop)
-    lat1 = np.radians(points[:-1, 0]); lon1 = np.radians(points[:-1, 1])
-    lat2 = np.radians(points[1:,  0]); lon2 = np.radians(points[1:,  1])
-    dlon = lon2 - lon1
-    y = np.sin(dlon) * np.cos(lat2)
-    x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(dlon)
-    bearings = (np.degrees(np.arctan2(y, x)) + 360.0) % 360.0  # (n-1,)
-
+    turn_scores = np.zeros(n)
+    
+    # Compute bearings (directions) for each segment
+    bearings = np.zeros(n - 1)
+    for i in range(n - 1):
+        lat1, lon1 = np.radians(points[i])
+        lat2, lon2 = np.radians(points[i + 1])
+        
+        dlon = lon2 - lon1
+        bearing = np.arctan2(
+            np.sin(dlon) * np.cos(lat2),
+            np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(dlon)
+        )
+        bearings[i] = np.degrees(bearing)
+        bearings[i] = (bearings[i] + 360) % 360
+    
     # Compute direction changes
     direction_changes = np.abs(np.diff(bearings))
     direction_changes = np.minimum(direction_changes, 360 - direction_changes)
@@ -131,7 +95,7 @@ def compute_turn_score(trajectory: pd.DataFrame,
     
     # Boost scores for points with high local variance (sharp turns)
     for i in range(1, n - 1):
-        local_variance = np.var(direction_changes[max(0, i - 2):min(n, i + 3)])
+        local_variance = np.var(direction_changes[max(0, i-2):min(n, i+3)])
         turn_scores[i] = turn_scores[i] * (1 + 0.5 * local_variance)
     
     turn_scores = np.clip(turn_scores, 0, 1)
@@ -140,8 +104,8 @@ def compute_turn_score(trajectory: pd.DataFrame,
 
 
 def compute_stop_score(trajectory: pd.DataFrame,
-                       stop_threshold: float = 1.0,
-                       min_duration: float = 30.0) -> np.ndarray:
+                       stop_threshold: float = STOP_SPEED_THRESHOLD_MS,
+                       min_duration: float = MIN_STOP_DURATION_S) -> np.ndarray:
     """
     Compute stop significance score for each point.
     
@@ -162,29 +126,43 @@ def compute_stop_score(trajectory: pd.DataFrame,
     
     points = trajectory[['lat', 'lon']].values
     n = len(points)
-
+    stop_scores = np.zeros(n)
+    
+    # Compute speeds
+    speeds = np.zeros(n)
     if 'timestamp' in trajectory.columns:
         timestamps = pd.to_datetime(trajectory['timestamp']).values
     else:
         timestamps = np.arange(n)
-
-    # Vectorised speed computation
-    speeds = _compute_speeds(points, timestamps)
-
-    # Pre-compute timestamp ns array for fast duration queries
-    ts_ns = np.asarray(pd.to_datetime(timestamps), dtype='datetime64[ns]').astype(np.int64)
-
-    # Identify stop regions using numpy diff (replaces nested Python loop)
+    
+    for i in range(1, n):
+        dist = haversine_distance(tuple(points[i-1]), tuple(points[i]))
+        time_diff = (pd.to_datetime(timestamps[i]) - pd.to_datetime(timestamps[i-1])).total_seconds()
+        if time_diff > 0:
+            speeds[i] = dist / time_diff
+        else:
+            speeds[i] = speeds[i-1] if i > 1 else 0
+    
+    # Identify stop regions
     is_stop = speeds < stop_threshold
-    changes = np.diff(np.concatenate([[False], is_stop, [False]]).astype(np.int8))
-    starts = np.where(changes == 1)[0]
-    ends   = np.where(changes == -1)[0]   # exclusive end indices
-
+    
+    # Compute stop durations
     stop_durations = np.zeros(n)
-    for s, e in zip(starts, ends):
-        duration = (ts_ns[e - 1] - ts_ns[s]) * 1e-9  # seconds
-        stop_durations[s:e] = duration
-
+    i = 0
+    while i < n:
+        if is_stop[i]:
+            # Find contiguous stop region
+            start = i
+            while i < n and is_stop[i]:
+                i += 1
+            duration = (pd.to_datetime(timestamps[i-1]) - pd.to_datetime(timestamps[start])).total_seconds()
+            
+            # Assign duration to all points in stop region
+            for j in range(start, i):
+                stop_durations[j] = duration
+        else:
+            i += 1
+    
     # Score based on duration (longer stops are more important)
     max_duration = np.max(stop_durations) if len(stop_durations) > 0 else 1
     if max_duration > 0:
@@ -218,14 +196,21 @@ def compute_speed_change_score(trajectory: pd.DataFrame,
     
     points = trajectory[['lat', 'lon']].values
     n = len(points)
-
+    
+    # Compute speeds
+    speeds = np.zeros(n)
     if 'timestamp' in trajectory.columns:
         timestamps = pd.to_datetime(trajectory['timestamp']).values
     else:
         timestamps = np.arange(n)
-
-    # Vectorised speed computation
-    speeds = _compute_speeds(points, timestamps)
+    
+    for i in range(1, n):
+        dist = haversine_distance(tuple(points[i-1]), tuple(points[i]))
+        time_diff = (pd.to_datetime(timestamps[i]) - pd.to_datetime(timestamps[i-1])).total_seconds()
+        if time_diff > 0:
+            speeds[i] = dist / time_diff
+        else:
+            speeds[i] = speeds[i-1] if i > 1 else 0
     
     # Compute speed changes (acceleration/deceleration)
     speed_changes = np.abs(np.diff(speeds))
@@ -263,15 +248,16 @@ def compute_irregularity_score(trajectory: pd.DataFrame) -> np.ndarray:
     
     n = len(trajectory)
     
-    if 'timestamp' not in trajectory.columns:
+    if 'timestamp' in trajectory.columns:
+        timestamps = pd.to_datetime(trajectory['timestamp']).values
+    else:
         # Uniform sampling - no irregularity
         return np.zeros(n)
-
-    timestamps = pd.to_datetime(trajectory['timestamp']).values
-
-    # Vectorised timestamp differences (replaces per-point pd.to_datetime loop)
+    
+    # Compute time intervals
     time_intervals = np.zeros(n)
-    time_intervals[1:] = _timestamp_diffs_s(timestamps)
+    for i in range(1, n):
+        time_intervals[i] = (pd.to_datetime(timestamps[i]) - pd.to_datetime(timestamps[i-1])).total_seconds()
     
     # Normalize by median (points with intervals >> median are in sparse regions)
     median_interval = np.median(time_intervals[1:])
@@ -326,9 +312,13 @@ def proposed_simplification(trajectory: pd.DataFrame,
             'irregular': 0.2
         }
     
-    # Normalize weights
+    # Normalize weights (if all weights are 0, fall back to uniform importance)
     total_weight = sum(weights.values())
-    weights = {k: v / total_weight for k, v in weights.items()}
+    if total_weight > 0:
+        weights = {k: v / total_weight for k, v in weights.items()}
+    else:
+        # geo_only or similar: no semantic scoring, rely on geometric refinement
+        weights = {k: 0.0 for k in weights}
     
     # Compute component scores
     turn_scores = compute_turn_score(trajectory)
@@ -362,25 +352,34 @@ def proposed_simplification(trajectory: pd.DataFrame,
             prev_idx = refined_indices[-1]
             curr_idx = selected_indices[i]
             
-            # Vectorised: check maximum error in segment prev_idx → curr_idx
-            interior = points[prev_idx + 1:curr_idx]
-            if len(interior) > 0:
-                dists = _point_to_line_distance_batch(
-                    interior,
+            # Check maximum error in segment
+            max_error = 0
+            for j in range(prev_idx + 1, curr_idx):
+                error = point_to_line_distance(
+                    tuple(points[j]),
                     tuple(points[prev_idx]),
-                    tuple(points[curr_idx]),
+                    tuple(points[curr_idx])
                 )
-                max_error = float(dists.max())
-                max_error_idx = prev_idx + 1 + int(np.argmax(dists))
-            else:
-                max_error = 0.0
-                max_error_idx = prev_idx + 1
+                max_error = max(max_error, error)
             
             # If error is acceptable, keep point
             # Otherwise, add intermediate point if needed
             if max_error <= min_geometric_error or curr_idx == selected_indices[-1]:
                 refined_indices.append(curr_idx)
             else:
+                # Find point with maximum error in segment
+                max_error_idx = prev_idx + 1
+                max_error_val = 0
+                for j in range(prev_idx + 1, curr_idx):
+                    error = point_to_line_distance(
+                        tuple(points[j]),
+                        tuple(points[prev_idx]),
+                        tuple(points[curr_idx])
+                    )
+                    if error > max_error_val:
+                        max_error_val = error
+                        max_error_idx = j
+                
                 # Add point with max error if budget allows
                 if len(refined_indices) < budget - 1:
                     refined_indices.append(max_error_idx)
@@ -404,33 +403,35 @@ def proposed_simplification(trajectory: pd.DataFrame,
 
 
 if __name__ == "__main__":
-    # Example usage
-    import pandas as pd
-    
-    # Create sample trajectory with turns and stops
-    n = 200
-    trajectory = pd.DataFrame({
-        'lat': np.concatenate([
-            np.linspace(0, 1, n//4),
-            np.linspace(1, 1, n//4),  # Stop region
-            np.linspace(1, 2, n//4),
-            np.linspace(2, 2, n//4)   # Another stop
-        ]) + np.random.normal(0, 0.01, n),
-        'lon': np.concatenate([
-            np.linspace(0, 0, n//4),
-            np.linspace(0, 1, n//4),  # Turn
-            np.linspace(1, 1, n//4),
-            np.linspace(1, 2, n//4)   # Turn
-        ]) + np.random.normal(0, 0.01, n),
-        'timestamp': pd.date_range('2023-01-01', periods=n, freq='30s')
-    })
-    
+    # Demo on real preprocessed GeoLife (same file as run_experiments.py).
+    import pickle
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    data_file = repo_root / "data" / "processed" / "trajectories.pkl"
+    if not data_file.is_file():
+        raise SystemExit(
+            f"Missing {data_file}. Download GeoLife to data/geolife/ then run:\n"
+            "  python src/utils/preprocess_geolife.py"
+        )
+
+    with open(data_file, "rb") as f:
+        trajectories = pickle.load(f)
+
+    trajectory = next((t for t in trajectories if len(t) >= 100), trajectories[0])
+    meta = []
+    if "user_id" in trajectory.columns:
+        meta.append(f"user={trajectory['user_id'].iloc[0]}")
+    if "file_id" in trajectory.columns:
+        meta.append(f"file={trajectory['file_id'].iloc[0]}")
+    print("Loaded preprocessed GeoLife trajectory" + (f" ({', '.join(meta)})" if meta else ""))
+
     print(f"Original trajectory: {len(trajectory)} points")
-    
-    # Simplify with proposed method
-    budget = 30
+
+    budget = max(30, len(trajectory) // 10)
     simplified, indices = proposed_simplification(trajectory, budget)
-    
+
     print(f"Simplified trajectory: {len(simplified)} points")
     print(f"Compression ratio: {len(trajectory) / len(simplified):.2f}x")
     print(f"Selected indices: {indices[:10]}...{indices[-5:]}")
+

@@ -241,7 +241,7 @@ if __name__ == "__main__":
     # Scalability test
     print("\nRunning scalability test...")
     scalability_results = scalability_test(
-        algorithms=['rdp', 'sliding_window', 'uniform', 'proposed'],
+        algorithms=['rdp', 'sliding_window', 'proposed'],
         trajectory_sizes=[100, 200, 500, 1000, 2000],
         compression_ratio=5.0,
         n_trajectories_per_size=2
