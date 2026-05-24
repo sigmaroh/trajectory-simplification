@@ -214,7 +214,7 @@ def _add_metrics_overlay(
     fmap.get_root().html.add_child(Element(overlay_html))
 
 
-def _add_selection_controls_overlay(
+def add_selection_controls_overlay(
     fmap: folium.Map,
     ratios: Sequence[float],
     trajectory_labels: Sequence[str],
@@ -695,7 +695,7 @@ def create_osm_comparison_map(
     _add_metrics_overlay(fmap, metric_rows)
     folium.LayerControl(position="topright", collapsed=False).add_to(fmap)
     trajectory_labels = [f"T{traj_id:04d}" for traj_id, _ in valid_pairs]
-    _add_selection_controls_overlay(fmap, compression_ratios, trajectory_labels)
+    add_selection_controls_overlay(fmap, compression_ratios, trajectory_labels)
     _add_algorithm_legend_overlay(fmap, algorithms)
     _add_zoom_bottom_right(fmap)
     output_path = Path(output_file)

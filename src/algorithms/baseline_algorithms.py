@@ -22,6 +22,57 @@ from typing import List, Tuple, Union
 import pandas as pd
 
 
+# ---------------------------------------------------------------------------
+# Private vectorised helpers – not part of the public API.
+#
+# These replicate the scalar logic of haversine_distance and
+# point_to_line_distance but operate on numpy arrays so that the inner
+# distance loops of every algorithm can be expressed as a single numpy
+# call instead of iterating point-by-point in Python.
+# ---------------------------------------------------------------------------
+
+def _haversine_batch(lats1: np.ndarray, lons1: np.ndarray,
+                     lats2: np.ndarray, lons2: np.ndarray) -> np.ndarray:
+    """Vectorised Haversine distance (degrees → metres) for arrays of points."""
+    lat1 = np.radians(lats1)
+    lon1 = np.radians(lons1)
+    lat2 = np.radians(lats2)
+    lon2 = np.radians(lons2)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return 6371000.0 * 2.0 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+
+
+def _point_to_line_distance_batch(pts: np.ndarray,
+                                   line_start: Tuple[float, float],
+                                   line_end: Tuple[float, float]) -> np.ndarray:
+    """
+    Perpendicular distances from an array of (lat, lon) points to a line
+    segment, using exactly the same projection + Haversine logic as the
+    scalar point_to_line_distance function.
+    """
+    lat1, lon1 = line_start
+    lat2, lon2 = line_end
+    dx = lon2 - lon1
+    dy = lat2 - lat1
+    if dx == 0 and dy == 0:
+        return _haversine_batch(
+            pts[:, 0], pts[:, 1],
+            np.full(len(pts), lat1, dtype=float),
+            np.full(len(pts), lon1, dtype=float),
+        )
+    denom = dx * dx + dy * dy
+    dx_p = pts[:, 1] - lon1
+    dy_p = pts[:, 0] - lat1
+    t = np.clip((dx_p * dx + dy_p * dy) / denom, 0.0, 1.0)
+    return _haversine_batch(pts[:, 0], pts[:, 1], lat1 + t * dy, lon1 + t * dx)
+
+
+# ---------------------------------------------------------------------------
+# Public scalar helpers – imported by other modules; do not rename or remove.
+# ---------------------------------------------------------------------------
+
 def haversine_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
     """
     Compute Haversine distance between two (lat, lon) points in meters.
@@ -124,21 +175,18 @@ def douglas_peucker(trajectory: Union[pd.DataFrame, np.ndarray],
     def rdp_recursive(start_idx: int, end_idx: int) -> List[int]:
         """Recursive RDP implementation."""
         if end_idx - start_idx <= 1:
-            return [start_idx]
+            return [start_idx, end_idx]
         
-        # Find point with maximum distance
-        max_dist = 0
-        max_idx = start_idx
-        
-        for i in range(start_idx + 1, end_idx):
-            dist = point_to_line_distance(
-                tuple(points[i]),
-                tuple(points[start_idx]),
-                tuple(points[end_idx])
-            )
-            if dist > max_dist:
-                max_dist = dist
-                max_idx = i
+        # Vectorised: compute all interior distances in one numpy call
+        interior = points[start_idx + 1:end_idx]
+        dists = _point_to_line_distance_batch(
+            interior,
+            tuple(points[start_idx]),
+            tuple(points[end_idx]),
+        )
+        max_idx_rel = int(np.argmax(dists))
+        max_dist = float(dists[max_idx_rel])
+        max_idx = start_idx + 1 + max_idx_rel
         
         # If max distance > epsilon, recursively simplify
         if max_dist > epsilon:
@@ -193,16 +241,18 @@ def sliding_window(trajectory: Union[pd.DataFrame, np.ndarray],
     start_idx = 0
     
     for i in range(2, len(points)):
-        # Check if adding point i violates error constraint
-        max_error = 0
-        for j in range(start_idx + 1, i):
-            dist = point_to_line_distance(
-                tuple(points[j]),
+        # Vectorised: check all interior points against line (start_idx → i)
+        interior = points[start_idx + 1:i]
+        if len(interior) > 0:
+            dists = _point_to_line_distance_batch(
+                interior,
                 tuple(points[start_idx]),
-                tuple(points[i])
+                tuple(points[i]),
             )
-            max_error = max(max_error, dist)
-        
+            max_error = float(dists.max())
+        else:
+            max_error = 0.0
+
         if max_error > epsilon:
             # Keep previous point, start new window
             indices_list.append(i - 1)
@@ -299,15 +349,22 @@ def adaptive_threshold(trajectory: Union[pd.DataFrame, np.ndarray],
             return list(range(len(points)))
         return points
     
-    # Compute speeds
+    # Vectorised speed computation (replaces per-point Python loop)
+    dists_consec = _haversine_batch(
+        points[:-1, 0], points[:-1, 1],
+        points[1:,  0], points[1:,  1],
+    )
+    # Convert timestamps to int64 nanoseconds for vectorised diff
+    _ts_ns = np.asarray(pd.to_datetime(timestamps), dtype='datetime64[ns]').astype(np.int64)
+    time_diffs_s = np.diff(_ts_ns) * 1e-9  # nanoseconds → seconds
+
     speeds = np.zeros(len(points))
+    valid = time_diffs_s > 0
+    speeds[1:] = np.where(valid, dists_consec / np.where(valid, time_diffs_s, 1.0), 0.0)
+    # Propagate previous speed for zero-duration intervals (original behaviour)
     for i in range(1, len(points)):
-        dist = haversine_distance(tuple(points[i-1]), tuple(points[i]))
-        time_diff = (pd.to_datetime(timestamps[i]) - pd.to_datetime(timestamps[i-1])).total_seconds()
-        if time_diff > 0:
-            speeds[i] = dist / time_diff
-        else:
-            speeds[i] = speeds[i-1] if i > 1 else 0
+        if time_diffs_s[i - 1] <= 0:
+            speeds[i] = speeds[i - 1] if i > 1 else 0.0
     
     # Normalize speeds to [0, 1]
     if np.max(speeds) > 0:
@@ -318,23 +375,25 @@ def adaptive_threshold(trajectory: Union[pd.DataFrame, np.ndarray],
     # Adaptive epsilon: higher speed -> larger threshold
     adaptive_epsilons = base_epsilon * (1 + speed_weight * speeds_norm)
     
-    # Apply sliding window with adaptive threshold
+    # Apply sliding window with adaptive threshold (vectorised inner loop)
     indices_list = [0]
     start_idx = 0
     
     for i in range(2, len(points)):
         # Use average epsilon for the segment
-        avg_epsilon = np.mean(adaptive_epsilons[start_idx:i+1])
-        
-        # Check error
-        max_error = 0
-        for j in range(start_idx + 1, i):
-            dist = point_to_line_distance(
-                tuple(points[j]),
+        avg_epsilon = float(adaptive_epsilons[start_idx:i + 1].mean())
+
+        # Vectorised: check all interior points in one batch call
+        interior = points[start_idx + 1:i]
+        if len(interior) > 0:
+            dists = _point_to_line_distance_batch(
+                interior,
                 tuple(points[start_idx]),
-                tuple(points[i])
+                tuple(points[i]),
             )
-            max_error = max(max_error, dist)
+            max_error = float(dists.max())
+        else:
+            max_error = 0.0
         
         if max_error > avg_epsilon:
             indices_list.append(i - 1)
@@ -378,24 +437,19 @@ def visvalingam_whyatt(trajectory: Union[pd.DataFrame, np.ndarray],
 
     active = list(range(n))
 
-    def triangle_area(i_prev: int, i_curr: int, i_next: int) -> float:
-        p1 = points[i_prev]
-        p2 = points[i_curr]
-        p3 = points[i_next]
-        return abs(
-            p1[1] * (p2[0] - p3[0]) +
-            p2[1] * (p3[0] - p1[0]) +
-            p3[1] * (p1[0] - p2[0])
-        ) / 2.0
-
     while len(active) > num_points:
-        min_area = np.inf
-        min_pos = None
-        for pos in range(1, len(active) - 1):
-            area = triangle_area(active[pos - 1], active[pos], active[pos + 1])
-            if area < min_area:
-                min_area = area
-                min_pos = pos
+        # Vectorised: compute triangle areas for all interior positions at once
+        arr = np.array(active)
+        p1 = points[arr[:-2]]   # previous neighbours
+        p2 = points[arr[1:-1]]  # interior candidates
+        p3 = points[arr[2:]]    # next neighbours
+        areas = np.abs(
+            p1[:, 1] * (p2[:, 0] - p3[:, 0]) +
+            p2[:, 1] * (p3[:, 0] - p1[:, 0]) +
+            p3[:, 1] * (p1[:, 0] - p2[:, 0])
+        ) / 2.0
+        # areas[k] corresponds to active position k+1 (endpoints excluded)
+        min_pos = int(np.argmin(areas)) + 1
         if min_pos is None:
             break
         active.pop(min_pos)
@@ -494,22 +548,21 @@ def squish(trajectory: Union[pd.DataFrame, np.ndarray],
 
     active = list(range(n))
 
-    def priority(pos: int) -> float:
-        # Endpoints are always preserved.
-        if pos == 0 or pos == len(active) - 1:
-            return np.inf
-        i_prev, i_curr, i_next = active[pos - 1], active[pos], active[pos + 1]
-        p1, p2, p3 = points[i_prev], points[i_curr], points[i_next]
-        area = abs(
-            p1[1] * (p2[0] - p3[0]) +
-            p2[1] * (p3[0] - p1[0]) +
-            p3[1] * (p1[0] - p2[0])
-        ) / 2.0
-        return area
-
     while len(active) > num_points:
-        priorities = [priority(pos) for pos in range(len(active))]
-        remove_pos = int(np.argmin(priorities))
+        # Vectorised: compute interior triangle areas (endpoints preserved)
+        arr = np.array(active)
+        if len(arr) <= 2:
+            break
+        p1 = points[arr[:-2]]
+        p2 = points[arr[1:-1]]
+        p3 = points[arr[2:]]
+        interior_areas = np.abs(
+            p1[:, 1] * (p2[:, 0] - p3[:, 0]) +
+            p2[:, 1] * (p3[:, 0] - p1[:, 0]) +
+            p3[:, 1] * (p1[:, 0] - p2[:, 0])
+        ) / 2.0
+        # interior_areas[k] → active position k+1 (endpoints always preserved)
+        remove_pos = int(np.argmin(interior_areas)) + 1
         if remove_pos == 0 or remove_pos == len(active) - 1:
             break
         active.pop(remove_pos)
@@ -580,8 +633,8 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
         return uniform_sampling(trajectory, budget, indices=False)
     
     elif algorithm == 'rdp':
-        # Binary search for epsilon
-        epsilon_min, epsilon_max = 0, 1000  # meters
+        # Binary search for epsilon (widened upper bound handles long trajectories)
+        epsilon_min, epsilon_max = 0, 100_000  # metres
         best_result = None
         
         for _ in range(20):  # Max 20 iterations
@@ -594,7 +647,7 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
             else:
                 epsilon_min = epsilon
             
-            if abs(len(result) - budget) <= 1:
+            if len(result) == budget:  # exact hit – no need to continue
                 break
         
         if best_result is None:
@@ -606,7 +659,7 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
     
     elif algorithm == 'sliding_window':
         # Binary search for epsilon
-        epsilon_min, epsilon_max = 0, 1000
+        epsilon_min, epsilon_max = 0, 100_000
         best_result = None
         
         for _ in range(20):
@@ -619,7 +672,7 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
             else:
                 epsilon_min = epsilon
             
-            if abs(len(result) - budget) <= 1:
+            if len(result) == budget:
                 break
         
         if best_result is None:
@@ -634,7 +687,7 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
         speed_weight = kwargs.get('speed_weight', 0.5)
         
         # Binary search for base_epsilon
-        epsilon_min, epsilon_max = 0, 1000
+        epsilon_min, epsilon_max = 0, 100_000
         best_result = None
         
         for _ in range(20):
@@ -647,7 +700,7 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
             else:
                 epsilon_min = base_eps
             
-            if abs(len(result) - budget) <= 1:
+            if len(result) == budget:
                 break
         
         if best_result is None:
@@ -664,7 +717,7 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
         return squish(trajectory, budget, indices=False)
 
     elif algorithm == 'rw':
-        epsilon_min, epsilon_max = 0, 1000
+        epsilon_min, epsilon_max = 0, 100_000
         best_result = None
 
         for _ in range(20):
@@ -677,7 +730,7 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
             else:
                 epsilon_min = epsilon
 
-            if abs(len(result) - budget) <= 1:
+            if len(result) == budget:
                 break
 
         if best_result is None:
@@ -719,4 +772,3 @@ if __name__ == "__main__":
     
     adaptive_result = simplify_with_budget(trajectory, 'adaptive', budget, base_epsilon=10.0)
     print(f"Adaptive result: {len(adaptive_result)} points")
-
