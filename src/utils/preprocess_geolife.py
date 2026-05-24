@@ -25,9 +25,10 @@ def main():
     # Initialize loader
     loader = GeoLifeLoader("data/geolife")
     
-    # Load trajectories
-    print("\nLoading trajectories...")
-    trajectories = loader.load_all_trajectories(max_users=50, min_points=100)
+    # Load trajectories (airplane trips excluded via label files + speed heuristic)
+    print("\nLoading trajectories (excluding airplane trips)...")
+    trajectories = loader.load_all_trajectories(max_users=182, min_points=100,
+                                                exclude_airplane=True)
     
     if not trajectories:
         print("ERROR: No trajectories loaded. Please check dataset path.")

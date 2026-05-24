@@ -11,7 +11,7 @@ The GeoLife GPS trajectory dataset [Zheng et al., 2009] is a publicly available 
 - **Total Points**: Over 24 million GPS points
 - **Geographic Coverage**: Primarily Beijing, China, with some trajectories in other cities
 - **Sampling Rate**: Variable, typically 1-5 seconds, but highly irregular
-- **Transportation Modes**: Walking, biking, bus, car, subway, train, airplane
+- **Transportation Modes**: Walking, biking, bus, car, subway, train (airplane trips excluded — see Section 3.2)
 
 ### 3.1.2 Data Format
 
@@ -25,10 +25,13 @@ Each trajectory is stored in a `.plt` file with the following format:
 
 We applied the following preprocessing steps:
 
-1. **Outlier Removal**: Removed points with unrealistic speeds (>200 m/s ≈ 720 km/h)
-2. **Spatial Outlier Detection**: Removed points with very large jumps using Median Absolute Deviation (MAD) with a 5 MAD threshold
-3. **Duplicate Removal**: Removed duplicate timestamps
-4. **Minimum Length Filter**: Kept only trajectories with at least 50 points after cleaning
+1. **Airplane Trajectory Exclusion**: Airplane trips are fundamentally different from ground mobility (long-distance, straight-line, non-urban) and are excluded before any other filtering. Two complementary methods are used:
+   - **Label-based (primary)**: For the 69 users who provided transportation mode labels (`labels.txt`), any `.plt` file whose time window overlaps with a segment labeled `airplane` is discarded.
+   - **Speed-based heuristic (fallback)**: For users without label files, trajectories whose mean speed exceeds 80 m/s (≈ 288 km/h — above any realistic ground vehicle) are discarded. This threshold is deliberately set below aircraft takeoff speed (~70–80 m/s) to catch low-altitude flight phases that a point-level speed filter would miss.
+2. **Outlier Removal**: Removed individual GPS points with unrealistic speeds (>200 m/s ≈ 720 km/h), which indicate GPS measurement errors.
+3. **Spatial Outlier Detection**: Removed points with very large spatial jumps using Median Absolute Deviation (MAD) with a 5-MAD threshold.
+4. **Duplicate Removal**: Removed duplicate timestamps.
+5. **Minimum Length Filter**: Kept only trajectories with at least 50 points after cleaning.
 
 ### 3.2.2 Trajectory Properties Computation
 

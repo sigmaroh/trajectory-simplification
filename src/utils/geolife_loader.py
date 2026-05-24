@@ -34,7 +34,82 @@ class GeoLifeLoader:
         """
         self.data_dir = Path(data_dir)
         self.trajectories = []
-        
+
+    def load_labels(self, user_id: str) -> pd.DataFrame:
+        """
+        Load transportation mode labels for a user if available.
+
+        Args:
+            user_id: User ID (e.g., "000")
+
+        Returns:
+            DataFrame with columns: start, end, mode  (empty if no label file)
+        """
+        label_file = self.data_dir / "Data" / user_id / "labels.txt"
+        if not label_file.exists():
+            return pd.DataFrame(columns=['start', 'end', 'mode'])
+        try:
+            labels = pd.read_csv(label_file, sep='\t',
+                                 names=['start', 'end', 'mode'], skiprows=1)
+            labels['start'] = pd.to_datetime(labels['start'])
+            labels['end'] = pd.to_datetime(labels['end'])
+            labels['mode'] = labels['mode'].str.strip().str.lower()
+            return labels
+        except Exception:
+            return pd.DataFrame(columns=['start', 'end', 'mode'])
+
+    def is_airplane_trajectory(self, traj: pd.DataFrame,
+                               labels: pd.DataFrame) -> bool:
+        """
+        Return True if the trajectory overlaps with any airplane-labeled segment.
+
+        Args:
+            traj: Trajectory DataFrame with a 'timestamp' column
+            labels: Labels DataFrame from load_labels()
+
+        Returns:
+            True if the trajectory should be excluded as airplane data
+        """
+        airplane_labels = labels[labels['mode'] == 'airplane']
+        if airplane_labels.empty:
+            return False
+        traj_start = traj['timestamp'].min()
+        traj_end = traj['timestamp'].max()
+        for _, row in airplane_labels.iterrows():
+            # Overlap check: two intervals overlap when start_A < end_B and end_A > start_B
+            if traj_start < row['end'] and traj_end > row['start']:
+                return True
+        return False
+
+    @staticmethod
+    def is_airplane_by_speed(traj: pd.DataFrame,
+                             speed_threshold_ms: float = 80.0) -> bool:
+        """
+        Fallback: return True if the trajectory's mean speed exceeds
+        speed_threshold_ms (default 80 m/s ≈ 288 km/h), which is above
+        any realistic ground vehicle speed in this dataset.
+
+        Args:
+            traj: Trajectory DataFrame
+            speed_threshold_ms: Mean-speed cutoff in m/s
+
+        Returns:
+            True if the trajectory should be excluded as airplane data
+        """
+        if len(traj) < 2:
+            return False
+        lat = np.radians(traj['lat'].values)
+        lon = np.radians(traj['lon'].values)
+        dlat, dlon = np.diff(lat), np.diff(lon)
+        a = np.sin(dlat / 2) ** 2 + np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(dlon / 2) ** 2
+        distances = 6371000 * 2 * np.arcsin(np.sqrt(a))
+        timestamps = pd.to_datetime(traj['timestamp'])
+        dt = timestamps.diff().dt.total_seconds().dropna().values
+        dt = np.where(dt < 1, 1, dt)          # avoid div-by-zero
+        speeds = distances / dt
+        mean_speed = np.mean(speeds)
+        return mean_speed > speed_threshold_ms
+
     def load_plt_file(self, filepath: str) -> pd.DataFrame:
         """
         Load a single .plt trajectory file.
@@ -79,68 +154,88 @@ class GeoLifeLoader:
             print(f"Error loading {filepath}: {e}")
             return pd.DataFrame()
     
-    def load_user_trajectories(self, user_id: str) -> List[pd.DataFrame]:
+    def load_user_trajectories(self, user_id: str,
+                               exclude_airplane: bool = True) -> List[pd.DataFrame]:
         """
         Load all trajectories for a specific user.
-        
+
         Args:
             user_id: User ID (e.g., "000", "001")
-            
+            exclude_airplane: If True, skip trajectories identified as airplane
+                              trips via label files (primary) or mean-speed
+                              heuristic (fallback for unlabelled users).
+
         Returns:
             List of trajectory DataFrames
         """
         user_dir = self.data_dir / "Data" / user_id / "Trajectory"
-        
+
         if not user_dir.exists():
             print(f"User directory not found: {user_dir}")
             return []
-        
+
+        labels = self.load_labels(user_id) if exclude_airplane else pd.DataFrame()
+        has_labels = not labels.empty
+
         trajectories = []
         plt_files = sorted(user_dir.glob("*.plt"))
-        
+
         for plt_file in plt_files:
             traj = self.load_plt_file(str(plt_file))
-            if not traj.empty and len(traj) > 10:  # Filter very short trajectories
-                traj['user_id'] = user_id
-                traj['file_id'] = plt_file.stem
-                trajectories.append(traj)
-        
+            if traj.empty or len(traj) <= 10:
+                continue
+
+            if exclude_airplane:
+                if has_labels:
+                    if self.is_airplane_trajectory(traj, labels):
+                        continue
+                else:
+                    if self.is_airplane_by_speed(traj):
+                        continue
+
+            traj['user_id'] = user_id
+            traj['file_id'] = plt_file.stem
+            trajectories.append(traj)
+
         return trajectories
     
-    def load_all_trajectories(self, max_users: int = None, 
-                             min_points: int = 50) -> List[pd.DataFrame]:
+    def load_all_trajectories(self, max_users: int = None,
+                             min_points: int = 50,
+                             exclude_airplane: bool = True) -> List[pd.DataFrame]:
         """
         Load trajectories from all users.
-        
+
         Args:
             max_users: Maximum number of users to load (None for all)
             min_points: Minimum number of points per trajectory
-            
+            exclude_airplane: If True, filter out airplane trajectories using
+                              label files (primary) or mean-speed heuristic
+                              (fallback for users without labels).
+
         Returns:
             List of trajectory DataFrames
         """
         data_path = self.data_dir / "Data"
-        
+
         if not data_path.exists():
             print(f"Data directory not found: {data_path}")
             print("Please download GeoLife dataset and extract to data/geolife/")
             return []
-        
+
         user_dirs = sorted([d for d in data_path.iterdir() if d.is_dir()])
-        
+
         if max_users:
             user_dirs = user_dirs[:max_users]
-        
+
         all_trajectories = []
-        
+
         for user_dir in user_dirs:
             user_id = user_dir.name
-            trajectories = self.load_user_trajectories(user_id)
-            
-            # Filter by minimum points
+            trajectories = self.load_user_trajectories(user_id,
+                                                       exclude_airplane=exclude_airplane)
             trajectories = [t for t in trajectories if len(t) >= min_points]
             all_trajectories.extend(trajectories)
-        
+
         print(f"Loaded {len(all_trajectories)} trajectories from {len(user_dirs)} users")
         return all_trajectories
 
