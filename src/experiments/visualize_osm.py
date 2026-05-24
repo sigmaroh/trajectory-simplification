@@ -39,6 +39,8 @@ ALGORITHM_COLORS = {
     "reumann-witkam": "red",
     "reumann_witkam": "red",
     "greedy_policy": "darkpurple",
+    "rl_dqn": "gray",
+    "rl": "gray",
     "greedy-policy": "darkpurple",
     "rl_inspired": "darkpurple",
     "proposed": "black",
@@ -145,6 +147,8 @@ def add_metrics_overlay(
         "rdp": "DP",
         "greedy_policy": "Greedy Policy (RL)",
         "greedy-policy": "Greedy Policy (RL)",
+        "rl_dqn":        "RL DQN (Wang 2021)",
+        "rl":            "RL DQN (Wang 2021)",
     }
     metric_columns = [
         ("hausdorff_distance", "HD (m)"),
@@ -441,6 +445,7 @@ def add_algorithm_legend_overlay(
         "vw": "VW",
         "rw": "RW",
         "greedy_policy": "Greedy Policy (RL)",
+        "rl_dqn":        "RL DQN (Wang 2021)",
         "proposed": "Proposed",
     }
 

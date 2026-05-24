@@ -44,7 +44,7 @@ PLOT_FONT_SIZE: int = 10
 EXPERIMENTS = {
     "max_trajectories": 50,
     "compression_ratios": [2.0, 5.0, 10.0, 20.0],
-    "algorithms": ["original", "dp", "us", "at", "squish", "vw", "rw", "greedy_policy", "proposed"],
+    "algorithms": ["original", "dp", "us", "at", "squish", "vw", "rw", "greedy_policy", "rl_dqn", "proposed"],
     "algorithm_params": {
         "greedy_policy": {
             "alpha": 0.5,

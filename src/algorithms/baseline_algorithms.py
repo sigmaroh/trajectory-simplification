@@ -6,11 +6,11 @@ This module implements standard baseline algorithms for trajectory simplificatio
 2. Visvalingam-Whyatt (VW) - Effective-area based
 3. Reumann-Witkam (RW) - Strip/corridor based
 4. SQUISH - Priority-based point removal
-5. Greedy Policy (RL-inspired) - Sequential keep/drop via local value function
-   Inspired by: Wang et al. (2021). Trajectory simplification with reinforcement
-   learning. ICDE 2021, 684-695. IEEE.
-6. Uniform Sampling (US) - Fixed interval point selection
-7. Adaptive Threshold (AT) - Speed-adaptive sliding window
+5. Greedy Policy (RL-inspired) - Training-free proxy with fixed value function
+6. RL DQN Policy - Full DQN agent (Wang et al., ICDE 2021); pre-train via:
+   python -m src.algorithms.rl_policy --epochs 50
+7. Uniform Sampling (US) - Fixed interval point selection
+8. Adaptive Threshold (AT) - Speed-adaptive sliding window
 
 Each algorithm has different strengths and weaknesses:
 - RDP: Good for geometric preservation, but ignores temporal/speed information
@@ -628,7 +628,9 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
         'greedy_policy': 'greedy_policy',
         'greedy-policy': 'greedy_policy',
         'rl_inspired': 'greedy_policy',
-        'rl': 'greedy_policy',
+        'rl_dqn': 'rl_dqn',
+        'rl': 'rl_dqn',
+        'dqn': 'rl_dqn',
     }
     algorithm = algorithm_aliases.get(algorithm_key, algorithm_key)
 
@@ -689,6 +691,12 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
     elif algorithm == 'greedy_policy':
         alpha = kwargs.get('alpha', 0.5)
         return greedy_policy_simplification(trajectory, budget, alpha=alpha, indices=False)
+
+    elif algorithm == 'rl_dqn':
+        from src.algorithms.rl_policy import get_or_load_model
+        weights = kwargs.get('weights_path', None)
+        model   = get_or_load_model(weights)
+        return model.simplify(trajectory, budget, indices=False)
 
     else:
         raise ValueError(f"Unknown algorithm: {algorithm}")

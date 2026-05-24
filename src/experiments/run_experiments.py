@@ -226,7 +226,7 @@ def main():
                        default=[2.0, 5.0, 10.0, 20.0],
                        help='Compression ratios to test')
     parser.add_argument('--algorithms', type=str, nargs='+',
-                       default=['original', 'dp', 'us', 'at', 'squish', 'vw', 'rw', 'greedy_policy', 'proposed'],
+                       default=['original', 'dp', 'us', 'at', 'squish', 'vw', 'rw', 'greedy_policy', 'rl_dqn', 'proposed'],
                        help='Algorithms to test')
     parser.add_argument('--data-file', type=str,
                        default='data/processed/trajectories.pkl',

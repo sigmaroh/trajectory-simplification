@@ -71,6 +71,7 @@ def plot_trajectory_comparison(trajectory: pd.DataFrame,
         'rw': 'Reumann-Witkam',
         'squish': 'SQUISH',
         'greedy_policy': 'Greedy Policy (RL-inspired)',
+        'rl_dqn': 'RL DQN (Wang et al. 2021)',
         'proposed': 'Proposed Method'
     }
     
@@ -166,16 +167,17 @@ def plot_compression_error_curves(results_df: pd.DataFrame,
     x_pos    = {cr: i for i, cr in enumerate(sorted(TARGET_CRS))}
     x_labels = [f"{int(cr)}×" for cr in sorted(TARGET_CRS)]
 
-    algo_order  = ['dp','us','at','vw','squish','rw','greedy_policy','proposed']
+    algo_order  = ['dp','us','at','vw','squish','rw','greedy_policy','rl_dqn','proposed']
     algo_colors = {
-        'dp':           '#FF6600',   # orange
-        'us':           '#3498DB',   # blue
-        'at':           '#1ABC9C',   # teal
-        'vw':           '#2ECC71',   # green
-        'squish':       '#E91E63',   # pink
-        'rw':           '#9B59B6',   # purple
-        'greedy_policy':'#FF5722',   # deep orange
-        'proposed':     '#212121',   # near-black
+        'dp':           '#FF6600',
+        'us':           '#3498DB',
+        'at':           '#1ABC9C',
+        'vw':           '#2ECC71',
+        'squish':       '#E91E63',
+        'rw':           '#9B59B6',
+        'greedy_policy':'#FF5722',
+        'rl_dqn':       '#7F8C8D',   # grey
+        'proposed':     '#212121',
     }
 
     for idx, (metric, ylabel) in enumerate(metrics):
@@ -377,7 +379,7 @@ def plot_per_metric_pages(results_df: pd.DataFrame,
 
     df['cr_label'] = df['compression_ratio'].apply(snap)
 
-    algo_order = ['dp', 'us', 'at', 'vw', 'squish', 'rw', 'greedy_policy', 'proposed']
+    algo_order = ['dp', 'us', 'at', 'vw', 'squish', 'rw', 'greedy_policy', 'rl_dqn', 'proposed']
     algo_colors = {
         'dp':           '#FF6600',
         'us':           '#3498DB',
@@ -386,6 +388,7 @@ def plot_per_metric_pages(results_df: pd.DataFrame,
         'squish':       '#E91E63',
         'rw':           '#9B59B6',
         'greedy_policy':'#FF5722',
+        'rl_dqn':       '#7F8C8D',
         'proposed':     '#212121',
     }
 
