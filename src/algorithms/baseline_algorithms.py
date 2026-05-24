@@ -3,17 +3,15 @@ PHASE 2: Baseline Trajectory Simplification Algorithms
 
 This module implements standard baseline algorithms for trajectory simplification:
 1. Douglas-Peucker (RDP) - Geometric distance-based
-2. Sliding Window - Local error threshold
-3. Visvalingam-Whyatt (VW) - Effective-area based
-4. Reumann-Witkam (RW) - Strip/corridor based
-5. SQUISH - Priority-based point removal
-6. Greedy Policy (RL-inspired) - Sequential keep/drop via local value function
+2. Visvalingam-Whyatt (VW) - Effective-area based
+3. Reumann-Witkam (RW) - Strip/corridor based
+4. SQUISH - Priority-based point removal
+5. Greedy Policy (RL-inspired) - Sequential keep/drop via local value function
    Inspired by: Wang et al. (2021). Trajectory simplification with reinforcement
    learning. ICDE 2021, 684-695. IEEE.
 
 Each algorithm has different strengths and weaknesses:
 - RDP: Good for geometric preservation, but ignores temporal/speed information
-- Sliding Window: Handles local variations, but may miss global patterns
 - Greedy Policy: Balances geometric deviation and motion change signal
 """
 
@@ -176,63 +174,6 @@ def douglas_peucker(trajectory: Union[pd.DataFrame, np.ndarray],
     
     return points[indices_list]
 
-
-def sliding_window(trajectory: Union[pd.DataFrame, np.ndarray],
-                  epsilon: float,
-                  indices: bool = False) -> Union[np.ndarray, List[int]]:
-    """
-    Sliding Window algorithm for trajectory simplification.
-    
-    Algorithm:
-    1. Start with first point
-    2. Extend window until error exceeds threshold
-    3. Keep last point before threshold, start new window
-    
-    Complexity: O(n)
-    When it fails: Global patterns, long straight segments with noise
-    
-    Args:
-        trajectory: DataFrame with 'lat', 'lon' columns or array of (lat, lon)
-        epsilon: Maximum allowed distance error (meters)
-        indices: If True, return indices instead of points
-        
-    Returns:
-        Simplified trajectory or list of indices
-    """
-    points = trajectory_to_points(trajectory)
-    
-    if len(points) <= 2:
-        if indices:
-            return list(range(len(points)))
-        return points
-    
-    indices_list = [0]
-    start_idx = 0
-    
-    for i in range(2, len(points)):
-        # Check if adding point i violates error constraint
-        max_error = 0
-        for j in range(start_idx + 1, i):
-            dist = point_to_line_distance(
-                tuple(points[j]),
-                tuple(points[start_idx]),
-                tuple(points[i])
-            )
-            max_error = max(max_error, dist)
-        
-        if max_error > epsilon:
-            # Keep previous point, start new window
-            indices_list.append(i - 1)
-            start_idx = i - 1
-    
-    # Always include last point
-    if indices_list[-1] != len(points) - 1:
-        indices_list.append(len(points) - 1)
-    
-    if indices:
-        return indices_list
-    
-    return points[indices_list]
 
 
 def visvalingam_whyatt(trajectory: Union[pd.DataFrame, np.ndarray],
@@ -535,7 +476,7 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
     
     Args:
         trajectory: Input trajectory
-        algorithm: Algorithm name ('rdp', 'sliding_window', 'vw', 'squish', 'rw', 'greedy_policy', ...)
+        algorithm: Algorithm name ('rdp', 'vw', 'squish', 'rw', 'greedy_policy', ...)
         budget: Target number of points
         **kwargs: Additional algorithm-specific parameters
         
@@ -554,9 +495,6 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
         'dp': 'rdp',
         'douglas-peucker': 'rdp',
         'douglas_peucker': 'rdp',
-        'sliding_window': 'sliding_window',
-        'sliding-window': 'sliding_window',
-        'sw': 'sliding_window',
         'visvalingam-whyatt': 'vw',
         'visvalingam_whyatt': 'vw',
         'vw': 'vw',
@@ -602,12 +540,6 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
         )
         return select_points(trajectory, selected_indices)
 
-    elif algorithm == 'sliding_window':
-        selected_indices = search_budget_indices(
-            lambda epsilon: sliding_window(trajectory, epsilon, indices=True)
-        )
-        return select_points(trajectory, selected_indices)
-
     elif algorithm == 'vw':
         return visvalingam_whyatt(trajectory, budget, indices=False)
 
@@ -648,6 +580,6 @@ if __name__ == "__main__":
     rdp_result = simplify_with_budget(trajectory, 'rdp', budget)
     print(f"RDP result: {len(rdp_result)} points")
     
-    sw_result = simplify_with_budget(trajectory, 'sliding_window', budget)
-    print(f"Sliding Window result: {len(sw_result)} points")
+    vw_result = simplify_with_budget(trajectory, 'vw', budget)
+    print(f"Visvalingam-Whyatt result: {len(vw_result)} points")
 

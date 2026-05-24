@@ -55,7 +55,7 @@ class ExperimentRunner:
         
         Args:
             trajectory: Input trajectory
-            algorithm: Algorithm name ('original', 'dp', 'squish', 'vw', 'sw', 'rw', 'proposed')
+            algorithm: Algorithm name ('original', 'dp', 'squish', 'vw', 'rw', 'greedy_policy', 'proposed')
             compression_ratio: Target compression ratio (e.g., 5.0 means 5x compression)
             algorithm_params: Additional parameters for algorithm
             
@@ -226,7 +226,7 @@ def main():
                        default=[2.0, 5.0, 10.0, 20.0],
                        help='Compression ratios to test')
     parser.add_argument('--algorithms', type=str, nargs='+',
-                       default=['original', 'dp', 'squish', 'vw', 'sw', 'rw', 'greedy_policy', 'proposed'],
+                       default=['original', 'dp', 'squish', 'vw', 'rw', 'greedy_policy', 'proposed'],
                        help='Algorithms to test')
     parser.add_argument('--data-file', type=str,
                        default='data/processed/trajectories.pkl',
