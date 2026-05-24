@@ -505,6 +505,74 @@ def generate_all_plots(results_file: str = "results/experiment_results.csv",
             output_path=str(output_dir / f"metric_comparison_{int(cr)}x.png")
         )
 
+    # --- Save aggregated plot data as CSV for later re-plotting ---
+    print("\nSaving aggregated plot data as CSV...")
+    csv_dir = output_dir / "plot_data"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+
+    # Compression-error curves: mean ± std per algorithm per CR per metric
+    metric_cols = [
+        'hausdorff_distance', 'average_pte', 'frechet_distance',
+        'ped', 'sed', 'dad', 'sad', 'issd',
+        'turn_preservation', 'stop_preservation', 'runtime_seconds',
+    ]
+    available_metrics = [m for m in metric_cols if m in results_3cr.columns]
+    TARGET_CRS = [2.0, 5.0, 10.0]
+    tol = 0.6
+
+    def snap_cr(v):
+        return min(TARGET_CRS, key=lambda cr: abs(v - cr))
+
+    df_agg = results_3cr.copy()
+    df_agg = df_agg[df_agg['compression_ratio'].apply(
+        lambda v: any(abs(v - cr) <= tol for cr in TARGET_CRS))]
+    df_agg['cr_label'] = df_agg['compression_ratio'].apply(snap_cr)
+
+    agg_rows = []
+    for (algo, cr), grp in df_agg.groupby(['algorithm', 'cr_label']):
+        row = {'algorithm': algo, 'compression_ratio': cr}
+        for m in available_metrics:
+            if m in grp.columns:
+                row[f'{m}_mean'] = round(grp[m].mean(), 6)
+                row[f'{m}_std']  = round(grp[m].std(), 6)
+        agg_rows.append(row)
+    agg_df = pd.DataFrame(agg_rows).sort_values(['algorithm', 'compression_ratio'])
+    agg_path = csv_dir / 'compression_error_aggregated.csv'
+    agg_df.to_csv(agg_path, index=False)
+    print(f"  Saved {agg_path}")
+
+    # Runtime scalability: mean ± std per algorithm per trajectory size
+    if 'trajectory_size' in results_3cr.columns:
+        rt_rows = []
+        for (algo, size), grp in results_3cr.groupby(['algorithm', 'trajectory_size']):
+            rt_rows.append({
+                'algorithm': algo,
+                'trajectory_size': size,
+                'runtime_mean': round(grp['runtime_seconds'].mean(), 6),
+                'runtime_std':  round(grp['runtime_seconds'].std(), 6),
+            })
+        rt_df = pd.DataFrame(rt_rows).sort_values(['algorithm', 'trajectory_size'])
+        rt_path = csv_dir / 'runtime_scalability.csv'
+        rt_df.to_csv(rt_path, index=False)
+        print(f"  Saved {rt_path}")
+
+    # Per-CR metric comparison: mean ± std per algorithm per metric at each CR
+    for cr in TARGET_CRS:
+        sub = results_3cr[abs(results_3cr['compression_ratio'] - cr) <= tol]
+        if sub.empty:
+            continue
+        mc_rows = []
+        for algo, grp in sub.groupby('algorithm'):
+            row = {'algorithm': algo, 'compression_ratio': cr}
+            for m in available_metrics:
+                if m in grp.columns:
+                    row[f'{m}_mean'] = round(grp[m].mean(), 6)
+                    row[f'{m}_std']  = round(grp[m].std(), 6)
+            mc_rows.append(row)
+        mc_path = csv_dir / f'metric_comparison_{int(cr)}x.csv'
+        pd.DataFrame(mc_rows).to_csv(mc_path, index=False)
+        print(f"  Saved {mc_path}")
+
     print(f"\nAll plots saved to {output_dir}")
 
 

@@ -254,6 +254,97 @@ def plot_turns_stops(s, out_dir):
     print(f'  Saved {path}')
 
 
+def save_stats_csv(trajectories: list, s: dict, out_dir: Path, max_traj: int) -> None:
+    """Save dataset statistics as CSV files for later viewing and re-plotting.
+
+    Produces:
+      dataset_per_trajectory.csv  — one row per trajectory with key stats
+      dataset_intervals.csv       — sampled inter-point intervals (up to 100k rows)
+      dataset_speeds.csv          — sampled point speeds (up to 100k rows)
+
+    Args:
+        trajectories: Original list of trajectory DataFrames (for metadata).
+        s:            Stats dict returned by compute_stats().
+        out_dir:      Directory to write CSV files.
+        max_traj:     Number of trajectories that were processed.
+    """
+    trajs = trajectories[:max_traj]
+
+    # --- Per-trajectory table ---
+    rows = []
+    for i, t in enumerate(trajs):
+        pts = t[['lat', 'lon']].values
+        dist_km = float(haversine_batch(pts).sum() / 1000)
+        dur_min = None
+        cv = None
+        stop_pct = None
+        turn_pct = None
+
+        if 'timestamp' in t.columns:
+            ts = pd.to_datetime(t['timestamp'])
+            dur_min = float((ts.iloc[-1] - ts.iloc[0]).total_seconds() / 60)
+            iv = ts.diff().dt.total_seconds().dropna().values
+            iv = iv[(iv > 0) & (iv < MAX_VALID_INTERVAL_S)]
+            if len(iv) > 1:
+                cv = float(iv.std() / iv.mean())
+
+            dt_arr = np.array(
+                [(pd.Timestamp(ts.values[j]) - pd.Timestamp(ts.values[j - 1])).total_seconds()
+                 for j in range(1, len(pts))]
+            )
+            mask = dt_arr > 0
+            dist_m = haversine_batch(pts)
+            spd = np.where(mask, dist_m / np.where(mask, dt_arr, 1), 0)
+            stop_pct = float(100 * (spd < STOP_SPEED_THRESHOLD_MS).mean())
+
+        if len(pts) >= 3:
+            la1, lo1 = np.radians(pts[:-1, 0]), np.radians(pts[:-1, 1])
+            la2, lo2 = np.radians(pts[1:, 0]),  np.radians(pts[1:, 1])
+            dlo = lo2 - lo1
+            b = np.degrees(np.arctan2(
+                np.sin(dlo) * np.cos(la2),
+                np.cos(la1) * np.sin(la2) - np.sin(la1) * np.cos(la2) * np.cos(dlo)
+            ))
+            b = (b + 360) % 360
+            dc = np.abs(np.diff(b))
+            dc = np.minimum(dc, 360 - dc)
+            turn_pct = float(100 * (dc >= TURN_THRESHOLD_DEG).mean())
+
+        rows.append({
+            'trajectory_index': i,
+            'user_id': t['user_id'].iloc[0] if 'user_id' in t.columns else None,
+            'file_id': t['file_id'].iloc[0] if 'file_id' in t.columns else None,
+            'num_points': len(t),
+            'distance_km': round(dist_km, 4),
+            'duration_min': round(dur_min, 2) if dur_min is not None else None,
+            'cv_interval': round(cv, 4) if cv is not None else None,
+            'stop_pct': round(stop_pct, 2) if stop_pct is not None else None,
+            'turn_pct': round(turn_pct, 2) if turn_pct is not None else None,
+        })
+
+    per_traj_path = out_dir / 'dataset_per_trajectory.csv'
+    pd.DataFrame(rows).to_csv(per_traj_path, index=False)
+    print(f'  Saved {per_traj_path}  ({len(rows)} rows)')
+
+    # --- Intervals (sampled to max 100k) ---
+    ivs = s['all_ivs']
+    if len(ivs) > 100_000:
+        rng = np.random.default_rng(42)
+        ivs = rng.choice(ivs, 100_000, replace=False)
+    iv_path = out_dir / 'dataset_intervals.csv'
+    pd.DataFrame({'interval_seconds': ivs}).to_csv(iv_path, index=False)
+    print(f'  Saved {iv_path}  ({len(ivs)} rows)')
+
+    # --- Speeds (sampled to max 100k) ---
+    spds = s['all_spds']
+    if len(spds) > 100_000:
+        rng = np.random.default_rng(42)
+        spds = rng.choice(spds, 100_000, replace=False)
+    spd_path = out_dir / 'dataset_speeds.csv'
+    pd.DataFrame({'speed_ms': spds}).to_csv(spd_path, index=False)
+    print(f'  Saved {spd_path}  ({len(spds)} rows)')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-file', default='data/processed/trajectories.pkl')
@@ -270,6 +361,9 @@ def main():
     print(f'  Loaded {len(trajectories)} trajectories. Computing stats on first {args.max_trajectories}...')
 
     s = compute_stats(trajectories, max_traj=args.max_trajectories)
+
+    print('Saving plot data as CSV...')
+    save_stats_csv(trajectories, s, out_dir, max_traj=args.max_trajectories)
 
     print('Generating dataset plots...')
     plot_length_distribution(s, out_dir)
