@@ -598,7 +598,7 @@ def create_osm_comparison_map(
     output_file: str,
     algorithms: Sequence[str],
     compression_ratios: Sequence[float],
-    max_trajectories: int = 5,
+    max_trajectories: int = 30,
     max_points_per_trajectory: int = 1000,
 ) -> Path:
     """Save an OSM map with toggleable layers for original + simplified trajectories."""
@@ -614,11 +614,8 @@ def create_osm_comparison_map(
     centers: List[Tuple[float, float]] = []
     valid_pairs: List[Tuple[int, pd.DataFrame]] = []
 
-    MAX_TRAJ_POINTS = 1000  # skip very long trajectories for fast rendering
     for traj_id, traj in selected_pairs:
         if not isinstance(traj, pd.DataFrame) or len(traj) < 2:
-            continue
-        if len(traj) > MAX_TRAJ_POINTS:
             continue
         try:
             lat_values, lon_values = extract_latlon(traj)

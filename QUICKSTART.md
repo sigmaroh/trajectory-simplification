@@ -1,11 +1,10 @@
 # Quick Start Guide
 
-## Installation
+## Setup
 
 ```bash
-# Option A — use the bundled setup script
+# Option A — bundled setup script
 ./venv_setup.sh
-source venv/bin/activate
 
 # Option B — manual
 python3 -m venv venv
@@ -13,211 +12,255 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
----
-
-## Quick Test (GeoLife Data Already Preprocessed)
-
-If `data/processed/trajectories.pkl` already exists, you can jump straight to experiments:
-
-```python
-import pickle, sys
-sys.path.insert(0, '.')
-from src.algorithms.baseline_algorithms import simplify_with_budget
-from src.algorithms.proposed_method import proposed_simplification
-from src.metrics.evaluation_metrics import compute_all_metrics
-
-with open('data/processed/trajectories.pkl', 'rb') as f:
-    trajectories = pickle.load(f)
-
-traj = trajectories[0]
-budget = len(traj) // 5  # 5× compression
-
-# Test Greedy Policy (RL-inspired)
-gp = simplify_with_budget(traj, 'greedy_policy', budget, alpha=0.5)
-print(f"Greedy Policy: {len(traj)} → {len(gp)} points")
-
-# Test Proposed method
-simp, idx = proposed_simplification(traj, budget)
-metrics = compute_all_metrics(traj, simp, idx)
-print(f"Proposed:      {len(traj)} → {len(simp)} points")
-print(f"Turn pres.: {metrics.get('turn_preservation', 'N/A'):.3f}  "
-      f"Stop pres.: {metrics.get('stop_preservation', 'N/A'):.3f}")
-```
+> All commands below use `./venv/bin/python` — replace with `python` if your venv is activated.
 
 ---
 
-## Full Workflow
+## Full Workflow (5 Steps)
 
 ### Step 1 — Preprocess GeoLife Data
 
 ```bash
-python src/utils/preprocess_geolife.py
+# All 182 users (full dataset — ~16,039 trajectories)
+./venv/bin/python -m src.utils.preprocess_geolife --all-users
+
+# Specific users only
+./venv/bin/python -m src.utils.preprocess_geolife --user-ids 000 001 010
+
+# First N users
+./venv/bin/python -m src.utils.preprocess_geolife --max-users 10
+
+# Custom output directory
+./venv/bin/python -m src.utils.preprocess_geolife --all-users --output-dir data/processed
 ```
 
-Outputs:
-- `data/processed/trajectories.pkl` — used by experiments
-- `data/processed/trajectory_properties.csv` — per-trajectory summary
-- `data/processed/trajectories_points.csv` — all GPS points (long CSV)
-- `data/processed/trajectories_index.csv` — trajectory index
+Outputs: `data/processed/trajectories.pkl`, `trajectory_properties.csv`, `trajectories_points.csv`
+
+---
 
 ### Step 2 — Run Experiments
 
 ```bash
-python src/experiments/run_experiments.py \
-    --max-trajectories 10 \
-    --compression-ratios 2.0 5.0 10.0 20.0 \
-    --algorithms dp vw squish rw greedy_policy proposed \
-    --data-file data/processed/trajectories.pkl
+# All trajectories, key algorithms, 3 compression ratios (recommended)
+./venv/bin/python -m src.experiments.run_experiments \
+  --algorithms dp vw squish rw greedy_policy proposed \
+  --compression-ratios 2 5 10
+
+# Specific users only
+./venv/bin/python -m src.experiments.run_experiments \
+  --user-ids 000 001 \
+  --algorithms vw rw proposed \
+  --compression-ratios 2 5 10
+
+# Fast run (skip slow DP)
+./venv/bin/python -m src.experiments.run_experiments \
+  --algorithms vw squish rw greedy_policy proposed \
+  --compression-ratios 2 5 10
+
+# Include all algorithms (us, at, rl_dqn, dp, etc.)
+./venv/bin/python -m src.experiments.run_experiments \
+  --algorithms dp us at vw squish rw greedy_policy rl_dqn proposed \
+  --compression-ratios 2 5 10
+
+# Limit trajectory count
+./venv/bin/python -m src.experiments.run_experiments \
+  --max-trajectories 20 \
+  --algorithms vw proposed \
+  --compression-ratios 2 5 10
 ```
 
 Outputs: `results/experiment_results.csv`, `results/summary_table.csv`
 
-> **Semantic metrics**: Turn/stop columns are filled for **proposed** rows only in the batch runner (baselines do not return selected indices).
+---
 
-> **Note on speed**: `dp` and `sw` are slow on long trajectories (O(n²) binary search).
-> Omit them or limit `--max-trajectories 5` for a faster run.
-
-### Step 3 — Generate Dataset Analysis Plots
+### Step 3 — Generate Dataset Plots
 
 ```bash
-python src/experiments/generate_dataset_plots.py \
-    --data-file data/processed/trajectories.pkl \
-    --max-trajectories 300
+./venv/bin/python -m src.experiments.generate_dataset_plots \
+  --data-file data/processed/trajectories.pkl \
+  --max-trajectories 300 \
+  --output-dir results/figures
 ```
 
-Outputs in `results/figures/`:
-- `dataset_length_distribution.png`
-- `dataset_sampling_irregularity.png`
-- `dataset_speed.png`
-- `dataset_turns_stops.png`
+Outputs: `dataset_length_distribution.png`, `dataset_sampling_irregularity.png`, `dataset_speed.png`, `dataset_turns_stops.png`
+
+---
 
 ### Step 4 — Generate Algorithm Comparison Plots
 
 ```bash
-python src/experiments/generate_plots.py \
-    --results-file results/experiment_results.csv \
-    --trajectories-file data/processed/trajectories.pkl \
-    --output-dir results/figures
+./venv/bin/python -m src.experiments.generate_plots \
+  --results-file results/experiment_results.csv \
+  --trajectories-file data/processed/trajectories.pkl \
+  --output-dir results/figures
 ```
 
 Outputs in `results/figures/`:
-- `trajectory_comparison.png` — DP, VW, RW, Greedy Policy, Proposed side-by-side
-- `compression_error_curves.png` — error vs compression ratio
-- `runtime_scalability.png` — runtime vs trajectory size
-- `metric_comparison_5x.png`, `metric_comparison_10x.png`
+
+| File | Description |
+|---|---|
+| `trajectory_comparison.png` | Side-by-side map at 5× CR |
+| `compression_error_curves.png` | Error vs CR for all algorithms |
+| `compression_error_curves_2x/5x/10x.png` | Per-CR breakdown |
+| `metric_comparison_2x/5x/10x.png` | Bar charts at each CR |
+| `runtime_scalability.png` | Runtime vs trajectory size |
+| `per_metric/metric_*.png` | One page per metric |
+| `plot_data/*.csv` | Raw aggregated plot data for re-plotting |
+
+---
 
 ### Step 5 — Generate Interactive OSM Map
 
 ```bash
-# Lightweight JSON + HTML viewer (recommended)
-python src/experiments/export_osm_json_map.py \
-    --algorithms "original,dp,vw,squish,rw,greedy_policy,proposed" \
-    --compression-ratios "5,10" \
-    --max-trajectories 1
+# Full Folium map (HD + Fréchet + APTE in tooltips and table)
+./venv/bin/python -m src.experiments.visualize_osm \
+  --comparison \
+  --algorithms "original,vw,rw,squish,greedy_policy,proposed" \
+  --compression-ratios "2,5,10" \
+  --max-trajectories 20 \
+  --output-file results/figures/trajectories_osm_comparison.html
 
-# Full Folium comparison map
-python src/experiments/visualize_osm.py \
-    --comparison \
-    --algorithms "original,dp,vw,squish,rw,greedy_policy,proposed" \
-    --compression-ratios "5,10" \
-    --max-trajectories 1 \
-    --output-file results/figures/trajectories_osm_comparison.html
-```
-
-### Step 6 — Dataset Analysis Notebook
-
-```bash
-jupyter notebook notebooks/01_dataset_analysis.ipynb
+# Lightweight JSON + HTML viewer
+./venv/bin/python -m src.experiments.export_osm_json_map \
+  --algorithms "original,vw,rw,squish,greedy_policy,proposed" \
+  --compression-ratios "5,10" \
+  --max-trajectories 5 \
+  --output-json results/figures/trajectories_osm_comparison_data.json \
+  --output-html results/figures/trajectories_osm_comparison_from_json.html
 ```
 
 ---
 
-## Project Structure at a Glance
+## All Available CLI Flags
 
-```
-src/algorithms/baseline_algorithms.py  ← DP, SW, VW, SQUISH, RW, Greedy Policy
-src/utils/config.py                    ← Central constants & experiment defaults
-src/algorithms/proposed_method.py      ← Proposed turn/stop/speed-aware method
-src/metrics/evaluation_metrics.py      ← All metrics (geometric + semantic)
-src/experiments/run_experiments.py     ← Main batch experiment runner
-src/experiments/generate_plots.py      ← Algorithm comparison plots
-src/experiments/generate_dataset_plots.py  ← Dataset characterisation plots
-src/experiments/visualize_osm.py       ← Folium OSM interactive map
-src/experiments/export_osm_json_map.py ← Lightweight JSON/HTML map
-config/experiment_config.yaml          ← Reference copy of experiment defaults
-```
+### `preprocess_geolife.py`
+
+| Flag | Default | Description |
+|---|---|---|
+| `--data-dir` | `data/geolife` | Path to GeoLife root |
+| `--all-users` | — | Load all 182 users |
+| `--max-users N` | 50 | Load first N users (ignored if `--user-ids` set) |
+| `--user-ids 000 010 …` | — | Load specific users only |
+| `--min-points N` | 100 | Min points per raw trajectory |
+| `--min-points-after-clean N` | 50 | Min points after outlier removal |
+| `--output-dir` | `data/processed` | Output directory |
+| `--export-csv-only PKL` | — | Convert existing `.pkl` to CSV only |
+
+### `run_experiments.py`
+
+| Flag | Default | Description |
+|---|---|---|
+| `--data-file` | `data/processed/trajectories.pkl` | Input trajectories |
+| `--user-ids 000 010 …` | — | Filter to specific users |
+| `--max-trajectories N` | *(no limit)* | Cap number of trajectories |
+| `--algorithms …` | all | Space-separated list: `dp us at vw squish rw greedy_policy rl_dqn proposed` |
+| `--compression-ratios …` | `2 5 10 20` | Target compression ratios |
+
+### `generate_plots.py`
+
+| Flag | Default | Description |
+|---|---|---|
+| `--results-file` | `results/experiment_results.csv` | Experiment results CSV |
+| `--trajectories-file` | `data/processed/trajectories.pkl` | Trajectories pickle |
+| `--output-dir` | `results/figures` | Plot output directory |
+
+### `generate_dataset_plots.py`
+
+| Flag | Default | Description |
+|---|---|---|
+| `--data-file` | `data/processed/trajectories.pkl` | Input trajectories |
+| `--max-trajectories N` | 300 | Trajectories to analyse |
+| `--output-dir` | `results/figures` | Output directory |
+
+### `visualize_osm.py`
+
+| Flag | Default | Description |
+|---|---|---|
+| `--comparison` | — | Enable algorithm comparison mode |
+| `--algorithms` | `"original,dp,vw,squish,rw,greedy_policy,proposed"` | Comma-separated list |
+| `--compression-ratios` | `"5"` | Comma-separated ratios |
+| `--max-trajectories N` | 30 | Max trajectories to render |
+| `--output-file` | `results/figures/trajectories_osm.html` | Output HTML path |
 
 ---
 
-## Common Snippets
+## Quick Code Snippets
 
-### Test a Single Algorithm
+### Load trajectories
 
 ```python
-import pickle, sys
-sys.path.insert(0, '.')
-from src.algorithms.baseline_algorithms import simplify_with_budget
-
+import pickle
 with open('data/processed/trajectories.pkl', 'rb') as f:
     trajs = pickle.load(f)
+print(f"{len(trajs)} trajectories, columns: {list(trajs[0].columns)}")
+```
+
+### Run one algorithm
+
+```python
+from src.algorithms.baseline_algorithms import simplify_with_budget
+traj = trajs[0]
+budget = len(traj) // 5   # 5× compression
+simp = simplify_with_budget(traj, 'vw', budget)
+print(f"VW: {len(traj)} → {len(simp)} pts")
+```
+
+### Run proposed method with metrics
+
+```python
+from src.algorithms.proposed_method import proposed_simplification
+from src.metrics.evaluation_metrics import compute_all_metrics
+
+simp, idx = proposed_simplification(traj, budget)
+m = compute_all_metrics(traj, simp, idx)
+print(f"Hausdorff: {m['hausdorff_distance']:.1f} m")
+print(f"Fréchet:   {m['frechet_distance']:.1f} m")
+print(f"Turn pres: {m.get('turn_preservation', 'N/A')}")
+print(f"Stop pres: {m.get('stop_preservation', 'N/A')}")
+```
+
+### Compare all algorithms on one trajectory
+
+```python
+import sys; sys.path.insert(0, '.')
+from src.algorithms.baseline_algorithms import simplify_with_budget
+from src.algorithms.proposed_method import proposed_simplification
+
 traj = trajs[0]
 budget = len(traj) // 5
 
-for algo in ['dp', 'vw', 'rw', 'greedy_policy']:
+for algo in ['dp', 'us', 'at', 'vw', 'squish', 'rw', 'greedy_policy']:
     simp = simplify_with_budget(traj, algo, budget)
-    print(f"{algo:15s}: {len(traj)} → {len(simp)} pts")
+    cr = len(traj) / len(simp)
+    print(f"  {algo:15s}: {len(traj)} → {len(simp)} pts  (CR={cr:.2f}×)")
+
+simp, idx = proposed_simplification(traj, budget)
+print(f"  {'proposed':15s}: {len(traj)} → {len(simp)} pts  (CR={len(traj)/len(simp):.2f}×)")
 ```
 
-### Compare Algorithms Visually
+### Plot trajectory comparison
 
 ```python
 from src.experiments.generate_plots import plot_trajectory_comparison
-import pickle, matplotlib
-matplotlib.use('Agg')
-
-with open('data/processed/trajectories.pkl', 'rb') as f:
-    trajs = pickle.load(f)
+import matplotlib; matplotlib.use('Agg')
 
 plot_trajectory_comparison(
     trajs[0],
     ['dp', 'vw', 'rw', 'greedy_policy', 'proposed'],
     compression_ratio=5.0,
-    output_path='my_comparison.png'
+    output_path='comparison.png'
 )
 ```
-
 
 ---
 
 ## Troubleshooting
 
-### Import Errors
-
-Run from the project root:
-```bash
-cd /home/sanjay/Desktop/DESKALL/CSIT-8-PROJECT
-python src/experiments/run_experiments.py
-```
-
-### DP / SW Are Very Slow
-
-For long GeoLife trajectories, DP uses binary search (O(n²) worst case). Use the fast subset:
-```bash
-python src/experiments/run_experiments.py \
-    --algorithms vw squish rw greedy_policy proposed \
-    --max-trajectories 10
-```
-
-### Memory Issues
-
-```bash
-python src/experiments/run_experiments.py --max-trajectories 5
-```
-
-### Externally Managed Python (no pip install)
-
-Use the bundled venv:
-```bash
-./venv_setup.sh
-venv/bin/python src/experiments/run_experiments.py ...
-```
+| Problem | Fix |
+|---|---|
+| `ModuleNotFoundError: No module named 'src'` | Run from project root: `cd /path/to/CSIT-8-PROJECT` |
+| `externally-managed-environment` pip error | Use `./venv/bin/python` instead of system `python` |
+| DP is slow | Use `--algorithms vw squish rw greedy_policy proposed` to skip DP |
+| Out of memory | Add `--max-trajectories 10` |
+| OSM map takes too long | Add `--max-trajectories 5` |
+| Plots show wrong CRs | Regenerate results with fixed DP: `run_experiments.py` (DP now returns exact budget) |
