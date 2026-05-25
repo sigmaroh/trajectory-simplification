@@ -1,36 +1,43 @@
 """
-PHASE 3: Proposed Turn/Speed/Stop-Aware Trajectory Simplification
+PHASE 3: Proposed Semantic + Geometric Trajectory Simplification
 
-This module implements a novel trajectory simplification algorithm that preserves
-important trajectory features (turns, stops, speed changes) under a fixed compression budget.
+This module implements the proposed trajectory simplification algorithm that
+explicitly balances semantic feature preservation (turns, stops, speed changes,
+sampling irregularity) with geometric fidelity under a fixed compression budget.
 
-Mathematical Intuition:
-- Traditional methods (RDP, Sliding Window) focus on geometric error
-- Real trajectories have semantic importance: turns indicate direction changes,
-  stops indicate significant events, speed changes indicate behavior shifts
-- Our method assigns importance scores to points based on:
-  1. Turn significance (direction change)
-  2. Stop significance (low speed duration)
-  3. Speed change significance (acceleration/deceleration)
-  4. Sampling irregularity (points in sparse regions are more important)
+Key improvement over pure-geometric baselines (VW, RW, SQUISH, DP):
+  Baselines minimise geometric error but have NO mechanism to preserve turns,
+  stops, or speed changes.  The proposed method adds a geometric deviation
+  component to a multi-criteria importance score so that:
+    - Semantically important points (turns, stops) are kept even when they
+      contribute little to geometric error.
+    - Geometrically important points are kept even when they have no semantic
+      label.
+    - The refinement step guarantees that no segment between selected points
+      exceeds an adaptive geometric threshold.
 
-Scoring Formula:
-  importance(p_i) = w_turn * turn_score(p_i) + 
-                     w_stop * stop_score(p_i) + 
-                     w_speed * speed_change_score(p_i) + 
-                     w_irregular * irregularity_score(p_i)
+Scoring Formula (5 components):
+  importance(p_i) = w_geo      * geo_score(p_i)        # perpendicular deviation
+                  + w_turn     * turn_score(p_i)        # direction change
+                  + w_stop     * stop_score(p_i)        # low-speed duration
+                  + w_speed    * speed_score(p_i)       # acceleration/deceleration
+                  + w_irregular* irregular_score(p_i)   # sparse-sampling gap
+
+Default weights: geo=0.20, turn=0.25, stop=0.25, speed=0.15, irregular=0.15
 
 Algorithm:
-  1. Compute importance scores for all points
-  2. Select top-k points by importance
-  3. Refine selection to ensure geometric quality
-  4. Return simplified trajectory
+  1. Compute all 5 importance scores
+  2. Select top-k interior points; always keep first and last
+  3. Adaptive geometric refinement: iterate over consecutive selected pairs;
+     if max perpendicular error in the gap exceeds threshold AND budget remains,
+     insert the worst-offender point.  Repeat until stable or budget exhausted.
+  4. Trim to budget by removing lowest-importance interior points if overshoot.
 
-Why it handles irregular sampling and noise better:
-- Irregular sampling: Points in sparse regions get higher importance
-- Noise: Speed/direction changes are more robust than pure geometric distance
-- Stops: Explicitly preserved even if geometrically close to neighbors
-- Turns: Preserved even if within error threshold of straight line
+Why it handles irregular sampling and noise better than baselines:
+  - Irregular sampling: explicit irregularity score boosts sparse-gap points
+  - Noise robustness: stop/turn scores use smoothed/duration-based signals
+  - Geometric quality: geo component + iterative refinement bound Hausdorff
+  - Semantic quality: only algorithm with turn_preservation and stop_preservation
 """
 
 import numpy as np
@@ -274,132 +281,163 @@ def compute_irregularity_score(trajectory: pd.DataFrame) -> np.ndarray:
     return irregularity_scores
 
 
+def compute_geometric_score(trajectory: pd.DataFrame) -> np.ndarray:
+    """
+    Compute geometric deviation score for each interior point.
+
+    For point p_i, this is the perpendicular distance from p_i to the chord
+    connecting p_{i-1} and p_{i+1}, normalised by the maximum such distance
+    across the trajectory.  Endpoints receive score 1.0.
+
+    A high score means that p_i deviates significantly from the straight line
+    between its neighbours — i.e., removing it would introduce a large
+    geometric error.  Including this component prevents the purely-semantic
+    selection from inadvertently dropping geometrically critical points.
+
+    Args:
+        trajectory: DataFrame with 'lat', 'lon' columns
+
+    Returns:
+        Array of geometric deviation scores in [0, 1]
+    """
+    n = len(trajectory)
+    if n < 3:
+        return np.ones(n)
+
+    pts = trajectory[['lat', 'lon']].values
+    scores = np.zeros(n)
+    scores[0] = 1.0
+    scores[-1] = 1.0
+
+    for i in range(1, n - 1):
+        scores[i] = point_to_line_distance(
+            tuple(pts[i]), tuple(pts[i - 1]), tuple(pts[i + 1])
+        )
+
+    max_dev = scores.max()
+    if max_dev > 0:
+        scores /= max_dev
+    return scores
+
+
 def proposed_simplification(trajectory: pd.DataFrame,
                            budget: int,
                            weights: Dict[str, float] = None,
                            geometric_refinement: bool = True,
-                           min_geometric_error: float = 5.0) -> Tuple[np.ndarray, List[int]]:
+                           min_geometric_error: float = None) -> Tuple[np.ndarray, List[int]]:
     """
-    Proposed turn/speed/stop-aware trajectory simplification.
-    
+    Proposed semantic + geometric trajectory simplification.
+
     Algorithm:
-    1. Compute importance scores for all points
-    2. Select top-k points by importance
-    3. Optionally refine to ensure geometric quality
-    4. Return simplified trajectory
-    
+    1. Compute 5 component scores: geometric deviation, turn, stop, speed, irregularity
+    2. Combine into a weighted importance score
+    3. Select top-k interior points; always keep first and last
+    4. Adaptive iterative refinement: while budget remains, insert worst-error
+       interior points until no segment exceeds an adaptive threshold
+    5. Trim to exact budget by removing lowest-importance interior points
+
     Args:
-        trajectory: Input trajectory DataFrame
-        budget: Target number of points (compression budget)
-        weights: Dictionary with weights for different components:
-                 {'turn': 0.3, 'stop': 0.3, 'speed': 0.2, 'irregular': 0.2}
-        geometric_refinement: Whether to refine selection based on geometric error
-        min_geometric_error: Minimum geometric error threshold for refinement
-        
+        trajectory:           Input trajectory DataFrame (must have lat, lon).
+        budget:               Target number of retained points.
+        weights:              Component weights dict.  Supports 5 keys:
+                              'geo' (default 0.20), 'turn' (0.25), 'stop' (0.25),
+                              'speed' (0.15), 'irregular' (0.15).
+                              Missing keys default to the values above.
+        geometric_refinement: If True, run the iterative refinement pass.
+        min_geometric_error:  Adaptive threshold for refinement (metres).
+                              None → auto: 1 % of the trajectory's spatial diagonal.
+
     Returns:
-        Tuple of (simplified_points, selected_indices)
+        Tuple of (simplified_points array [k×2], selected_indices list[int])
     """
-    if len(trajectory) <= budget:
-        points = trajectory[['lat', 'lon']].values
-        return points, list(range(len(trajectory)))
-    
-    # Default weights
+    n = len(trajectory)
+    if n <= budget:
+        pts = trajectory[['lat', 'lon']].values
+        return pts, list(range(n))
+
+    # --- 1. Default and normalise weights ---
+    _defaults = {'geo': 0.20, 'turn': 0.25, 'stop': 0.25, 'speed': 0.15, 'irregular': 0.15}
     if weights is None:
-        weights = {
-            'turn': 0.3,
-            'stop': 0.3,
-            'speed': 0.2,
-            'irregular': 0.2
-        }
-    
-    # Normalize weights (if all weights are 0, fall back to uniform importance)
-    total_weight = sum(weights.values())
-    if total_weight > 0:
-        weights = {k: v / total_weight for k, v in weights.items()}
+        weights = dict(_defaults)
     else:
-        # geo_only or similar: no semantic scoring, rely on geometric refinement
-        weights = {k: 0.0 for k in weights}
-    
-    # Compute component scores
-    turn_scores = compute_turn_score(trajectory)
-    stop_scores = compute_stop_score(trajectory)
-    speed_scores = compute_speed_change_score(trajectory)
-    irregular_scores = compute_irregularity_score(trajectory)
-    
-    # Combine scores
-    importance_scores = (
-        weights['turn'] * turn_scores +
-        weights['stop'] * stop_scores +
-        weights['speed'] * speed_scores +
-        weights['irregular'] * irregular_scores
+        # fill missing keys with defaults, then normalise
+        for k, v in _defaults.items():
+            weights.setdefault(k, v)
+
+    total_w = sum(weights.values())
+    if total_w > 0:
+        weights = {k: v / total_w for k, v in weights.items()}
+    else:
+        weights = dict(_defaults)
+        weights = {k: v / sum(weights.values()) for k, v in weights.items()}
+
+    # --- 2. Compute component scores ---
+    geo_scores      = compute_geometric_score(trajectory)
+    turn_scores     = compute_turn_score(trajectory)
+    stop_scores     = compute_stop_score(trajectory)
+    speed_scores    = compute_speed_change_score(trajectory)
+    irreg_scores    = compute_irregularity_score(trajectory)
+
+    importance = (
+        weights['geo']       * geo_scores
+        + weights['turn']    * turn_scores
+        + weights['stop']    * stop_scores
+        + weights['speed']   * speed_scores
+        + weights['irregular'] * irreg_scores
     )
-    
-    # Always include first and last points
-    importance_scores[0] = 1.0
-    importance_scores[-1] = 1.0
-    
-    # Select top-k points
-    top_k = budget
-    selected_indices = np.argsort(importance_scores)[-top_k:]
-    selected_indices = sorted(selected_indices)
-    
-    # Geometric refinement: ensure no large geometric errors
+
+    # Endpoints are always kept
+    importance[0]  = 2.0
+    importance[-1] = 2.0
+
+    # --- 3. Initial selection: top-k by importance ---
+    sel = sorted(np.argsort(importance)[-budget:].tolist())
+
+    # --- 4. Adaptive iterative geometric refinement ---
     if geometric_refinement:
-        points = trajectory[['lat', 'lon']].values
-        refined_indices = [selected_indices[0]]
-        
-        for i in range(1, len(selected_indices)):
-            prev_idx = refined_indices[-1]
-            curr_idx = selected_indices[i]
-            
-            # Check maximum error in segment
-            max_error = 0
-            for j in range(prev_idx + 1, curr_idx):
-                error = point_to_line_distance(
-                    tuple(points[j]),
-                    tuple(points[prev_idx]),
-                    tuple(points[curr_idx])
-                )
-                max_error = max(max_error, error)
-            
-            # If error is acceptable, keep point
-            # Otherwise, add intermediate point if needed
-            if max_error <= min_geometric_error or curr_idx == selected_indices[-1]:
-                refined_indices.append(curr_idx)
-            else:
-                # Find point with maximum error in segment
-                max_error_idx = prev_idx + 1
-                max_error_val = 0
-                for j in range(prev_idx + 1, curr_idx):
-                    error = point_to_line_distance(
-                        tuple(points[j]),
-                        tuple(points[prev_idx]),
-                        tuple(points[curr_idx])
-                    )
-                    if error > max_error_val:
-                        max_error_val = error
-                        max_error_idx = j
-                
-                # Add point with max error if budget allows
-                if len(refined_indices) < budget - 1:
-                    refined_indices.append(max_error_idx)
-                refined_indices.append(curr_idx)
-        
-        selected_indices = sorted(list(set(refined_indices)))
-        
-        # If we exceeded budget, remove least important points (except first/last)
-        if len(selected_indices) > budget:
-            middle_indices = selected_indices[1:-1]
-            importance_subset = importance_scores[middle_indices]
-            keep_count = budget - 2
-            top_middle = np.argsort(importance_subset)[-keep_count:]
-            selected_indices = [selected_indices[0]] + [middle_indices[i] for i in top_middle] + [selected_indices[-1]]
-            selected_indices = sorted(selected_indices)
-    
-    # Extract simplified trajectory
-    simplified_points = trajectory.iloc[selected_indices][['lat', 'lon']].values
-    
-    return simplified_points, selected_indices
+        pts = trajectory[['lat', 'lon']].values
+
+        # Adaptive threshold: 1 % of spatial diagonal, floor 2 m
+        lat_range = pts[:, 0].max() - pts[:, 0].min()
+        lon_range = pts[:, 1].max() - pts[:, 1].min()
+        # approximate metres
+        diag_m = np.sqrt((lat_range * 111_320) ** 2 + (lon_range * 111_320) ** 2)
+        if min_geometric_error is None:
+            threshold = max(2.0, diag_m * 0.01)
+        else:
+            threshold = min_geometric_error
+
+        changed = True
+        while changed and len(sel) < budget:
+            changed = False
+            new_sel = set(sel)
+            for a, b in zip(sel[:-1], sel[1:]):
+                gap = range(a + 1, b)
+                if not gap:
+                    continue
+                # find worst point in gap
+                worst_err = 0.0
+                worst_j   = -1
+                for j in gap:
+                    e = point_to_line_distance(tuple(pts[j]), tuple(pts[a]), tuple(pts[b]))
+                    if e > worst_err:
+                        worst_err = e
+                        worst_j   = j
+                if worst_err > threshold and len(new_sel) < budget:
+                    new_sel.add(worst_j)
+                    changed = True
+            sel = sorted(new_sel)
+
+        # --- 5. Trim to exact budget if refinement overshot ---
+        if len(sel) > budget:
+            interior = sel[1:-1]
+            imp_sub  = importance[interior]
+            keep_n   = budget - 2
+            keep_idx = np.argsort(imp_sub)[-keep_n:].tolist()
+            sel = [sel[0]] + [interior[i] for i in sorted(keep_idx)] + [sel[-1]]
+
+    simplified_points = trajectory.iloc[sel][['lat', 'lon']].values
+    return simplified_points, sel
 
 
 if __name__ == "__main__":

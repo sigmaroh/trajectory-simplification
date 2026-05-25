@@ -100,10 +100,16 @@ class ExperimentRunner:
             throughput = 1.0 / runtime if runtime > 0 else float('inf')
 
             # Add experiment metadata
+            n_out = len(simplified)
             result = {
                 'algorithm': algorithm,
                 'compression_ratio': compression_ratio,
                 'budget': budget,
+                'input_points': len(trajectory),
+                'output_points': n_out,
+                'actual_compression_ratio': (
+                    len(trajectory) / n_out if n_out > 0 else None
+                ),
                 'runtime_seconds': runtime,
                 'memory_mb': memory_mb,
                 'throughput_traj_per_sec': throughput,
