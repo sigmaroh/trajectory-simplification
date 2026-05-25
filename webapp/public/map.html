@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trajectory Map</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    .mode-tabs { display:flex; gap:.4rem; align-items:center; margin-bottom:.75rem; }
+    .mode-tab {
+      padding:.38rem .95rem; border-radius:6px; font-size:.83rem; font-weight:600;
+      cursor:pointer; border:1.5px solid var(--border); background:#fff; color:var(--text-muted);
+      transition:all .15s;
+    }
+    .mode-tab.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+
+    .tile-switcher { display:flex; gap:.35rem; align-items:center; margin-left:auto; }
+    .tile-btn {
+      padding:.28rem .65rem; border-radius:5px; font-size:.76rem; font-weight:600;
+      cursor:pointer; border:1.5px solid var(--border); background:#fff; color:var(--text-muted);
+    }
+    .tile-btn.active { background:#1e293b; color:#fff; border-color:#1e293b; }
+
+    .map-overlay-panel {
+      position:absolute; z-index:900; background:rgba(255,255,255,.94);
+      border:1px solid var(--border); border-radius:8px;
+      box-shadow:0 2px 8px rgba(0,0,0,.12); padding:.6rem .8rem; font-size:.78rem;
+    }
+    #osm-layer-panel  { top:10px; left:10px; min-width:220px; max-height:52vh; overflow-y:auto; }
+    #osm-metric-panel { bottom:10px; left:10px; max-width:calc(100% - 20px); max-height:36vh; overflow:auto; }
+    #osm-legend-panel { top:10px; right:10px; min-width:120px; }
+
+    .osm-panel-title { font-weight:700; margin-bottom:.5rem; }
+    .layer-row { display:flex; align-items:center; gap:.4rem; padding:.18rem 0; cursor:pointer; }
+    .swatch { width:12px; height:12px; border-radius:2px; border:1px solid #555; flex-shrink:0; }
+
+    #osm-metric-table { border-collapse:collapse; font-size:.75rem; }
+    #osm-metric-table th {
+      background:#f8fafc; padding:3px 7px; text-align:left;
+      white-space:nowrap; border-bottom:2px solid var(--border);
+    }
+    #osm-metric-table td { padding:3px 7px; border-bottom:1px solid #f1f5f9; text-align:right; }
+    #osm-metric-table td:first-child,
+    #osm-metric-table td:nth-child(2) { text-align:left; }
+
+    .hidden { display:none !important; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar">
+  <span class="brand">📍 Trajectory Simplification</span>
+  <nav>
+    <a href="dashboard.html">Dashboard</a>
+    <a href="plots.html">Plots</a>
+    <a href="map.html" class="active">Map</a>
+  </nav>
+</nav>
+
+<div class="page" style="padding-bottom:0">
+
+  <!-- mode tabs + tile switcher -->
+  <div style="display:flex; flex-wrap:wrap; align-items:center; gap:.6rem; margin-bottom:.6rem;">
+    <div class="mode-tabs">
+      <span style="font-size:.8rem;font-weight:600;color:var(--text-muted);margin-right:.3rem">View:</span>
+      <button class="mode-tab active" id="tab-simple" onclick="switchMode('simple')">Single Algorithm</button>
+      <button class="mode-tab"        id="tab-osm"    onclick="switchMode('osm')">OSM Comparison</button>
+    </div>
+    <div class="tile-switcher">
+      <span style="font-size:.76rem;font-weight:600;color:var(--text-muted)">Map style:</span>
+      <button class="tile-btn active" onclick="setTile('osm',this)">OpenStreetMap</button>
+      <button class="tile-btn"        onclick="setTile('carto',this)">Carto Light</button>
+      <button class="tile-btn"        onclick="setTile('dark',this)">Dark</button>
+      <button class="tile-btn"        onclick="setTile('esri',this)">Esri Grey</button>
+    </div>
+  </div>
+
+  <!-- Simple mode filter bar -->
+  <div class="filter-bar" id="bar-simple">
+    <label>User
+      <select id="f-user" onchange="loadTrajectoryList()"><option value="">All users</option></select>
+    </label>
+    <label>Trajectory
+      <select id="f-tid"><option value="">Select trajectory</option></select>
+    </label>
+    <label>Algorithm
+      <select id="f-algo"><option value="">— pick algorithm —</option></select>
+    </label>
+    <label>Compression Ratio
+      <select id="f-cr">
+        <option value="2">2×</option>
+        <option value="5" selected>5×</option>
+        <option value="10">10×</option>
+        <option value="20">20×</option>
+      </select>
+    </label>
+    <button class="btn btn-primary" onclick="loadOnMap()">Show on Map</button>
+    <button class="btn btn-outline"  onclick="clearMap()">Clear</button>
+    <span id="map-status" style="font-size:.8rem;color:#64748b;align-self:center"></span>
+  </div>
+
+  <!-- OSM Comparison filter bar -->
+  <div class="filter-bar hidden" id="bar-osm">
+    <label>Trajectory
+      <select id="osm-f-tid"><option value="">Select trajectory</option></select>
+    </label>
+    <label>Compression Ratio
+      <select id="osm-f-cr">
+        <option value="2">2×</option>
+        <option value="5" selected>5×</option>
+        <option value="10">10×</option>
+        <option value="20">20×</option>
+      </select>
+    </label>
+    <label>Algorithms (Ctrl+click multi-select)
+      <select id="osm-f-algos" multiple style="min-height:60px;min-width:160px">
+        <option value="original" selected>original</option>
+        <option value="dp"       selected>dp</option>
+        <option value="vw"       selected>vw</option>
+        <option value="squish"   selected>squish</option>
+        <option value="rw"       selected>rw</option>
+        <option value="greedy_policy" selected>greedy_policy</option>
+        <option value="proposed" selected>proposed</option>
+      </select>
+    </label>
+    <button class="btn btn-primary" onclick="loadOsmComparison()">Load Comparison</button>
+    <button class="btn btn-outline"  onclick="clearMap()">Clear</button>
+    <span id="osm-status" style="font-size:.8rem;color:#64748b;align-self:center"></span>
+  </div>
+
+  <!-- Map layout -->
+  <div class="map-layout">
+
+    <!-- Sidebar (simple mode) -->
+    <div class="map-sidebar" id="sidebar-simple">
+      <div class="card">
+        <h3>Legend</h3>
+        <div class="legend-item"><div class="legend-line" style="background:#3b82f6"></div> Original</div>
+        <div class="legend-item"><div class="legend-line" style="background:#ef4444;border-top:2px dashed #ef4444;height:0"></div> Simplified</div>
+        <div class="legend-item"><span style="background:#ef4444;width:10px;height:10px;border-radius:50%;display:inline-block"></span>&nbsp;Kept points</div>
+      </div>
+      <div class="card">
+        <h3>Trajectory Info</h3>
+        <div id="traj-info" style="font-size:.82rem;color:#64748b">Select a trajectory.</div>
+      </div>
+      <div class="card">
+        <h3>Error Metrics</h3>
+        <div id="metric-info" style="font-size:.82rem;color:#64748b">—</div>
+      </div>
+      <div class="card">
+        <h3>Trajectory List</h3>
+        <div id="traj-list-loading" style="display:none"><div class="spinner"></div></div>
+        <div id="traj-list" style="max-height:280px;overflow-y:auto;font-size:.8rem"></div>
+      </div>
+    </div>
+
+    <!-- Map -->
+    <div class="map-main" style="position:relative">
+      <div id="map-container">
+        <div id="map" style="height:100%;width:100%"></div>
+      </div>
+
+      <!-- OSM overlay panels -->
+      <div class="map-overlay-panel hidden" id="osm-layer-panel">
+        <div class="osm-panel-title">Visible Layers</div>
+        <div id="osm-layer-list"></div>
+      </div>
+
+      <div class="map-overlay-panel hidden" id="osm-metric-panel">
+        <div class="osm-panel-title">Error Metrics</div>
+        <div style="overflow-x:auto">
+          <table id="osm-metric-table">
+            <thead>
+              <tr>
+                <th>Algorithm</th>
+                <th>CR</th>
+                <th>Hausdorff (m)</th>
+                <th>Fréchet (m)</th>
+                <th>APTE (m)</th>
+                <th>PED (m)</th>
+                <th>SED (m)</th>
+                <th>DAD (°)</th>
+                <th>SAD (m/s)</th>
+                <th>ISSD</th>
+                <th>Turn Pres.</th>
+                <th>Stop Pres.</th>
+              </tr>
+            </thead>
+            <tbody id="osm-metric-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="map-overlay-panel hidden" id="osm-legend-panel">
+        <div class="osm-panel-title">Algorithms</div>
+        <div id="osm-legend-body"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="js/map.js"></script>
+</body>
+</html>

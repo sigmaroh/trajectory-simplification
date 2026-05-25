@@ -207,16 +207,20 @@ class GeoLifeLoader:
     
     def load_all_trajectories(self, max_users: int = None,
                              min_points: int = 50,
-                             exclude_airplane: bool = True) -> List[pd.DataFrame]:
+                             exclude_airplane: bool = True,
+                             user_ids: list = None) -> List[pd.DataFrame]:
         """
-        Load trajectories from all users.
+        Load trajectories from all (or selected) users.
 
         Args:
-            max_users: Maximum number of users to load (None for all)
-            min_points: Minimum number of points per trajectory
-            exclude_airplane: If True, filter out airplane trajectories using
-                              label files (primary) or mean-speed heuristic
-                              (fallback for users without labels).
+            max_users:        Maximum number of users to load (None for all).
+                              Ignored when user_ids is specified.
+            min_points:       Minimum number of points per trajectory.
+            exclude_airplane: Filter out airplane trajectories via label files
+                              or mean-speed heuristic.
+            user_ids:         Optional list of specific user IDs to load
+                              (e.g. ['000', '010', '050']).  When provided,
+                              max_users is ignored.
 
         Returns:
             List of trajectory DataFrames
@@ -230,7 +234,14 @@ class GeoLifeLoader:
 
         user_dirs = sorted([d for d in data_path.iterdir() if d.is_dir()])
 
-        if max_users:
+        if user_ids is not None:
+            # Normalise to zero-padded 3-digit strings
+            target = set(uid.zfill(3) for uid in user_ids)
+            user_dirs = [d for d in user_dirs if d.name in target]
+            missing = target - {d.name for d in user_dirs}
+            if missing:
+                print(f"  Warning: user IDs not found in dataset: {sorted(missing)}")
+        elif max_users:
             user_dirs = user_dirs[:max_users]
 
         all_trajectories = []

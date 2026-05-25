@@ -127,6 +127,15 @@ def main():
         help="Directory for trajectories.pkl and CSV outputs",
     )
     parser.add_argument(
+        "--user-ids",
+        type=str,
+        nargs="+",
+        default=None,
+        metavar="ID",
+        help="Load only specific users, e.g. --user-ids 000 010 050. "
+             "Overrides --max-users and --all-users.",
+    )
+    parser.add_argument(
         "--export-csv-only",
         type=str,
         default=None,
@@ -139,9 +148,12 @@ def main():
         export_pickle_to_csv(args.export_csv_only, args.output_dir)
         return
 
-    max_users = None if args.all_users else args.max_users
-    if max_users == 0:
-        max_users = None
+    # Resolve user scope
+    user_ids = [uid.zfill(3) for uid in args.user_ids] if args.user_ids else None
+    if user_ids:
+        max_users = None   # user_ids takes precedence
+    else:
+        max_users = None if (args.all_users or args.max_users == 0) else args.max_users
 
     print("=" * 60)
     print("GeoLife Dataset Preprocessing")
@@ -156,9 +168,11 @@ def main():
         print("  max_users: all users")
     else:
         print(f"  max_users: {max_users}")
+    if user_ids:
+        print(f"  user_ids: {user_ids}")
     trajectories = loader.load_all_trajectories(
         max_users=max_users, min_points=args.min_points,
-        exclude_airplane=True
+        exclude_airplane=True, user_ids=user_ids,
     )
     
     if not trajectories:

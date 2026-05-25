@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trajectory Metrics Dashboard</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<nav class="navbar">
+  <span class="brand">📍 Trajectory Simplification</span>
+  <nav>
+    <a href="dashboard.html" class="active">Dashboard</a>
+    <a href="plots.html">Plots</a>
+    <a href="map.html">Map</a>
+  </nav>
+</nav>
+
+<div class="page">
+
+  <!-- Filter bar -->
+  <div class="filter-bar">
+    <label>Algorithm
+      <select id="f-algo"><option value="">All algorithms</option></select>
+    </label>
+    <label>Compression Ratio
+      <select id="f-cr"><option value="">All ratios</option></select>
+    </label>
+    <label>User ID
+      <select id="f-user"><option value="">All users</option></select>
+    </label>
+    <button class="btn btn-primary" onclick="applyFilters()">Apply</button>
+    <button class="btn btn-outline" onclick="resetFilters()">Reset</button>
+  </div>
+
+  <!-- Stat cards -->
+  <div class="stat-grid" id="stat-cards">
+    <div class="stat-card"><div class="label">Algorithms</div><div class="value" id="s-algos">—</div></div>
+    <div class="stat-card"><div class="label">Total Runs</div><div class="value" id="s-runs">—</div></div>
+    <div class="stat-card"><div class="label">Best Hausdorff</div><div class="value" id="s-best-h">—</div><div class="sub" id="s-best-h-algo"></div></div>
+    <div class="stat-card"><div class="label">Best Fréchet</div><div class="value" id="s-best-fr">—</div><div class="sub" id="s-best-fr-algo"></div></div>
+    <div class="stat-card"><div class="label">Best Stop Pres.</div><div class="value" id="s-best-sp">—</div><div class="sub" id="s-best-sp-algo"></div></div>
+    <div class="stat-card"><div class="label">Fastest</div><div class="value" id="s-fastest">—</div><div class="sub" id="s-fastest-algo"></div></div>
+  </div>
+
+  <!-- Charts row 1: Geometric error -->
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Hausdorff Distance by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-hausdorff"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Fréchet Distance by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-frechet"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Charts row 2: Semantic -->
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Stop Preservation by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-stop"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Turn Preservation by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-turn"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Charts row 3: APTE + Runtime -->
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Average PTE by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-apte"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Mean Runtime (seconds)</h3>
+      <div class="chart-wrap"><canvas id="chart-runtime"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Summary table -->
+  <div class="card">
+    <h3>Summary Table — Mean metrics by algorithm × compression ratio</h3>
+    <div id="table-loading"><div class="spinner"></div></div>
+    <div class="table-wrap" id="summary-table" style="display:none"></div>
+  </div>
+
+</div>
+
+<script src="js/dashboard.js"></script>
+</body>
+</html>

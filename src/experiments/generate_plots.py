@@ -152,17 +152,12 @@ def plot_compression_error_curves(results_df: pd.DataFrame,
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4.5 * n_rows))
     axes = np.atleast_1d(axes).flatten()
     
-    # Snap compression ratios to nearest target for clean x-axis
+    # compression_ratio is already snapped to exact [2.0, 5.0, 10.0] by main()
     TARGET_CRS = [2.0, 5.0, 10.0]
-    tol = 0.6
-
-    def snap_cr(v):
-        return min(TARGET_CRS, key=lambda cr: abs(v - cr))
 
     df_plot = results_df.copy()
-    df_plot = df_plot[df_plot['compression_ratio'].apply(
-        lambda v: any(abs(v - cr) <= tol for cr in TARGET_CRS))]
-    df_plot['cr_label'] = df_plot['compression_ratio'].apply(snap_cr)
+    df_plot = df_plot[df_plot['compression_ratio'].isin(TARGET_CRS)]
+    df_plot['cr_label'] = df_plot['compression_ratio'].apply(float)
 
     x_pos    = {cr: i for i, cr in enumerate(sorted(TARGET_CRS))}
     x_labels = [f"{int(cr)}×" for cr in sorted(TARGET_CRS)]
@@ -453,16 +448,38 @@ def generate_all_plots(results_file: str = "results/experiment_results.csv",
     with open(trajectories_file, 'rb') as f:
         trajectories = pickle.load(f)
 
-    # Use only 2×, 5×, 10× CRs; drop 20× if present
+    # ------------------------------------------------------------------
+    # Derive the TARGET compression ratio from budget + input_points.
+    # The stored `compression_ratio` column is the *actual* achieved ratio
+    # (n / output_pts), which differs from the target for DP (which may
+    # return far fewer points than the budget).
+    # target_cr = input_points / budget  →  always the clean 2.0 / 5.0 / 10.0
+    # ------------------------------------------------------------------
     KEEP_CRS = [2.0, 5.0, 10.0]
-    tol = 0.6
-    cr_mask = results_df['compression_ratio'].apply(
-        lambda v: any(abs(v - cr) <= tol for cr in KEEP_CRS))
+    tol_target = 0.6   # tolerance when snapping to nearest target CR
+
+    if 'budget' in results_df.columns and 'input_points' in results_df.columns:
+        results_df['target_cr'] = (
+            pd.to_numeric(results_df['input_points'], errors='coerce') /
+            pd.to_numeric(results_df['budget'],       errors='coerce')
+        )
+    else:
+        # Fallback: use the stored compression_ratio as-is
+        results_df['target_cr'] = pd.to_numeric(results_df['compression_ratio'], errors='coerce')
+
+    cr_mask = results_df['target_cr'].apply(
+        lambda v: pd.notna(v) and any(abs(v - cr) <= tol_target for cr in KEEP_CRS))
     results_3cr = results_df[cr_mask].copy()
+
+    # Snap target_cr to the nearest clean label for all downstream grouping
+    def _snap(v):
+        return min(KEEP_CRS, key=lambda cr: abs(v - cr))
+    results_3cr['compression_ratio'] = results_3cr['target_cr'].apply(_snap)
 
     print(f"Loaded {len(trajectories)} trajectories, {len(results_df)} total rows, "
           f"{len(results_3cr)} rows after filtering to 2×/5×/10×")
     print(f"Algorithms: {sorted(results_3cr['algorithm'].unique())}")
+    print(f"Target CRs found: {sorted(results_3cr['compression_ratio'].unique())}")
 
     print("\nGenerating plots...")
 
@@ -486,7 +503,7 @@ def generate_all_plots(results_file: str = "results/experiment_results.csv",
     # 2b. Per-CR combined pages
     for cr in KEEP_CRS:
         print(f"2b. Combined page at {int(cr)}×...")
-        sub = results_3cr[abs(results_3cr['compression_ratio'] - cr) <= tol]
+        sub = results_3cr[results_3cr['compression_ratio'] == cr]
         if not sub.empty:
             plot_compression_error_curves(
                 sub,
@@ -505,14 +522,16 @@ def generate_all_plots(results_file: str = "results/experiment_results.csv",
         output_path=str(output_dir / "runtime_scalability.png")
     )
 
-    # 5. Metric comparison bar charts per CR
+    # 5. Metric comparison bar charts per CR (exact match after snapping)
     print("5. Metric comparison bar charts...")
     for cr in KEEP_CRS:
-        plot_metric_comparison(
-            results_3cr,
-            compression_ratio=cr,
-            output_path=str(output_dir / f"metric_comparison_{int(cr)}x.png")
-        )
+        sub_cr = results_3cr[results_3cr['compression_ratio'] == cr]
+        if not sub_cr.empty:
+            plot_metric_comparison(
+                sub_cr,
+                compression_ratio=cr,
+                output_path=str(output_dir / f"metric_comparison_{int(cr)}x.png")
+            )
 
     # --- Save aggregated plot data as CSV for later re-plotting ---
     print("\nSaving aggregated plot data as CSV...")

@@ -226,8 +226,8 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Run trajectory simplification experiments')
-    parser.add_argument('--max-trajectories', type=int, default=20,
-                       help='Maximum number of trajectories to test')
+    parser.add_argument('--max-trajectories', type=int, default=None,
+                       help='Maximum number of trajectories to test (default: all)')
     parser.add_argument('--compression-ratios', type=float, nargs='+',
                        default=[2.0, 5.0, 10.0, 20.0],
                        help='Compression ratios to test')
@@ -237,15 +237,26 @@ def main():
     parser.add_argument('--data-file', type=str,
                        default='data/processed/trajectories.pkl',
                        help='Path to preprocessed trajectories file')
-    
+    parser.add_argument('--user-ids', type=str, nargs='+', default=None,
+                       help='Filter to specific GeoLife user IDs, e.g. --user-ids 000 001 010')
+
     args = parser.parse_args()
-    
+
     # Load trajectories
     print("Loading trajectories...")
     with open(args.data_file, 'rb') as f:
         trajectories = pickle.load(f)
-    
+
     print(f"Loaded {len(trajectories)} trajectories")
+
+    # Filter by user if requested
+    if args.user_ids:
+        user_set = set(uid.zfill(3) for uid in args.user_ids)
+        trajectories = [
+            t for t in trajectories
+            if 'user_id' in t.columns and t['user_id'].iloc[0] in user_set
+        ]
+        print(f"Filtered to users {sorted(user_set)}: {len(trajectories)} trajectories remaining")
     
     # Initialize runner
     runner = ExperimentRunner(trajectories, output_dir="results")

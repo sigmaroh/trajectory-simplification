@@ -18,7 +18,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.algorithms.baseline_algorithms import simplify_with_budget
 from src.algorithms.proposed_method import proposed_simplification
-from src.metrics.evaluation_metrics import compute_all_metrics
+from src.metrics.evaluation_metrics import (
+    compute_all_metrics,
+    hausdorff_distance as _hausdorff,
+    frechet_distance as _frechet,
+    average_point_to_trajectory_error as _apte,
+)
 
 ALGORITHM_COLORS = {
     "none": "gray",
@@ -151,14 +156,9 @@ def add_metrics_overlay(
         "rl":            "RL DQN (Wang 2021)",
     }
     metric_columns = [
-        ("hausdorff_distance", "HD (m)"),
+        ("hausdorff_distance", "Hausdorff (m)"),
         ("frechet_distance", "Fréchet (m)"),
         ("average_pte", "APTE (m)"),
-        ("ped", "PED (m)"),
-        ("sed", "SED (m)"),
-        ("dad", "DAD (deg)"),
-        ("sad", "SAD (m/s)"),
-        ("issd", "ISSD (m*s)"),
     ]
 
     rows_html = []
@@ -614,8 +614,11 @@ def create_osm_comparison_map(
     centers: List[Tuple[float, float]] = []
     valid_pairs: List[Tuple[int, pd.DataFrame]] = []
 
+    MAX_TRAJ_POINTS = 1000  # skip very long trajectories for fast rendering
     for traj_id, traj in selected_pairs:
         if not isinstance(traj, pd.DataFrame) or len(traj) < 2:
+            continue
+        if len(traj) > MAX_TRAJ_POINTS:
             continue
         try:
             lat_values, lon_values = extract_latlon(traj)
@@ -668,14 +671,51 @@ def create_osm_comparison_map(
                     simplified = simplify_trajectory(traj, algorithm, compression_ratio=ratio)
                     if simplified.shape[0] < 2:
                         continue
+
+                    algo_key = algorithm.lower()
+
+                    # Compute HD / Fréchet / APTE first so tooltip can show them
+                    hd = fd = apt = float("nan")
+                    if algo_key not in {"original", "none"}:
+                        MAX_METRIC_PTS = 120
+                        orig_pts = traj[["lat", "lon"]].values
+                        simp_pts = simplified
+                        if len(orig_pts) > MAX_METRIC_PTS:
+                            keep_o = np.linspace(0, len(orig_pts) - 1, MAX_METRIC_PTS, dtype=int)
+                            orig_pts = orig_pts[keep_o]
+                        if len(simp_pts) > MAX_METRIC_PTS:
+                            keep_s = np.linspace(0, len(simp_pts) - 1, MAX_METRIC_PTS, dtype=int)
+                            simp_pts = simp_pts[keep_s]
+                        hd  = _hausdorff(orig_pts, simp_pts)
+                        fd  = _frechet(orig_pts, simp_pts)
+                        apt = _apte(orig_pts, simp_pts)
+
                     path = downsample_path(simplified[:, 0], simplified[:, 1], max_points=max_points_per_trajectory)
                     color = ALGORITHM_COLORS.get(algorithm.lower(), fallback_colors[traj_index % len(fallback_colors)])
+
+                    # Build tooltip: plain for original, metrics for simplified
+                    if algo_key in {"original", "none"}:
+                        tooltip_text = (
+                            f"<b>Original</b> — T{traj_id:04d}<br>"
+                            f"Points: {len(path)}"
+                        )
+                    else:
+                        def _fmt(v):
+                            return f"{v:.1f}" if np.isfinite(v) else "—"
+                        tooltip_text = (
+                            f"<b>{algo_key.upper()}</b> — T{traj_id:04d} | {ratio:.2f}× CR<br>"
+                            f"Points: {len(path)}<br>"
+                            f"Hausdorff: {_fmt(hd)} m<br>"
+                            f"<b>Fréchet: {_fmt(fd)} m</b><br>"
+                            f"APTE: {_fmt(apt)} m"
+                        )
+
                     folium.PolyLine(
                         path,
-                        weight=3 if algorithm == "original" else 2,
-                        opacity=0.9 if algorithm == "original" else 0.75,
+                        weight=3 if algo_key == "original" else 2,
+                        opacity=0.9 if algo_key == "original" else 0.75,
                         color=color,
-                        tooltip=f"Trajectory {traj_id} | {algorithm} | {ratio:.2f}x | points={len(path)}",
+                        tooltip=folium.Tooltip(tooltip_text, sticky=True),
                     ).add_to(layer)
                     folium.CircleMarker(
                         path[0], radius=3, color="green", fill=True, fill_opacity=0.8
@@ -685,22 +725,20 @@ def create_osm_comparison_map(
                     ).add_to(layer)
                     layer.add_to(fmap)
 
-                    algo_key = algorithm.lower()
                     if algo_key not in {"original", "none"}:
-                        metrics = compute_all_metrics(traj, simplified, original_indices=None)
                         metric_rows.append({
                             "ratio_label": f"{ratio:.2f}x",
                             "trajectory_id": f"T{traj_id:04d}",
                             "algorithm": algorithm,
                             "layer_label": layer_name,
-                            "hausdorff_distance": metrics.get("hausdorff_distance"),
-                            "frechet_distance": metrics.get("frechet_distance"),
-                            "average_pte": metrics.get("average_pte"),
-                            "ped": metrics.get("ped"),
-                            "sed": metrics.get("sed"),
-                            "dad": metrics.get("dad"),
-                            "sad": metrics.get("sad"),
-                            "issd": metrics.get("issd"),
+                            "hausdorff_distance": hd,
+                            "frechet_distance": fd,
+                            "average_pte": apt,
+                            "ped": np.nan,
+                            "sed": np.nan,
+                            "dad": np.nan,
+                            "sad": np.nan,
+                            "issd": np.nan,
                         })
                 except Exception:
                     continue

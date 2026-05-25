@@ -637,8 +637,39 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
     if algorithm == 'original':
         return select_points(trajectory)
 
+    def _pad_indices_to_budget(sel: List[int], pts: np.ndarray) -> List[int]:
+        """Pad sel to exactly `budget` by re-inserting the highest-PED excluded points."""
+        sel_set = set(sel)
+        if len(sel_set) >= budget:
+            # Trim: keep endpoints + highest-scoring interior
+            interior = [i for i in sorted(sel_set) if i not in (0, len(pts) - 1)]
+            scores = [point_to_line_distance(tuple(pts[i]),
+                                             tuple(pts[max(0, i-1)]),
+                                             tuple(pts[min(len(pts)-1, i+1)]))
+                      for i in interior]
+            keep = [interior[k] for k in sorted(range(len(interior)),
+                                                 key=lambda k: scores[k],
+                                                 reverse=True)[: budget - 2]]
+            return sorted([0, len(pts) - 1] + keep)
+
+        sel_sorted = sorted(sel_set)
+        candidates: List[tuple] = []
+        for a, b in zip(sel_sorted[:-1], sel_sorted[1:]):
+            for j in range(a + 1, b):
+                if j not in sel_set:
+                    d = point_to_line_distance(tuple(pts[j]),
+                                               tuple(pts[a]),
+                                               tuple(pts[b]))
+                    candidates.append((d, j))
+        candidates.sort(reverse=True)
+        needed = budget - len(sel_set)
+        for _, j in candidates[:needed]:
+            sel_set.add(j)
+        return sorted(sel_set)
+
     def search_budget_indices(search_fn: Callable[[float], List[int]]) -> List[int]:
-        """Binary-search epsilon to reach the target budget point count."""
+        """Binary-search epsilon to reach the target budget point count.
+        After the search, pad or trim the result to hit exactly `budget`."""
         epsilon_min, epsilon_max = BINARY_SEARCH_EPS_MIN, BINARY_SEARCH_EPS_MAX
         best_result: Optional[List[int]] = None
         last_result: List[int] = []
@@ -657,7 +688,13 @@ def simplify_with_budget(trajectory: Union[pd.DataFrame, np.ndarray],
             if abs(len(result) - budget) <= BINARY_SEARCH_TOLERANCE:
                 break
 
-        return best_result if best_result is not None else last_result
+        raw = best_result if best_result is not None else last_result
+
+        # Guarantee exact budget by padding/trimming
+        pts = trajectory[['lat', 'lon']].values if hasattr(trajectory, 'iloc') else trajectory
+        if len(raw) != budget:
+            raw = _pad_indices_to_budget(raw, pts)
+        return raw
 
     if algorithm == 'rdp':
         selected_indices = search_budget_indices(
