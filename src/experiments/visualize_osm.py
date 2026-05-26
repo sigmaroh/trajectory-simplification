@@ -43,11 +43,11 @@ ALGORITHM_COLORS = {
     "rw": "red",
     "reumann-witkam": "red",
     "reumann_witkam": "red",
-    "greedy_policy": "darkpurple",
-    "rl_dqn": "gray",
-    "rl": "gray",
-    "greedy-policy": "darkpurple",
-    "rl_inspired": "darkpurple",
+    "greedy_policy": "#7b2d8b",
+    "rl_dqn": "#e67e00",
+    "rl": "#e67e00",
+    "greedy-policy": "#7b2d8b",
+    "rl_inspired": "#7b2d8b",
     "proposed": "black",
 }
 
@@ -643,7 +643,7 @@ def create_osm_comparison_map(
     )
     add_basemap_layers(fmap)
 
-    fallback_colors = ["darkblue", "darkpurple", "darkgreen", "darkred", "pink"]
+    fallback_colors = ["darkblue", "#7b2d8b", "darkgreen", "darkred", "deeppink"]
 
     metric_rows: List[dict] = []
     default_ratio = compression_ratios[0] if len(compression_ratios) > 0 else None
