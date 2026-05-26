@@ -22,21 +22,23 @@
 
 **Q: How does your importance scoring work?**
 
-**A**: We compute four per-point scores, each normalised to [0,1], and combine them with weights summing to 1:
+**A**: We compute **five** per-point scores (each normalised to [0,1]) and combine them with weights summing to 1:
 
 ```
-importance(p_i) = 0.30 × turn_score(p_i)
-               + 0.30 × stop_score(p_i)
-               + 0.20 × speed_change_score(p_i)
-               + 0.20 × irregularity_score(p_i)
+importance(p_i) = 0.20 × geo_score(p_i)
+               + 0.25 × turn_score(p_i)
+               + 0.25 × stop_score(p_i)
+               + 0.15 × speed_change_score(p_i)
+               + 0.15 × irregularity_score(p_i)
 ```
 
+- **Geo score**: Normalised perpendicular distance to neighbour chord — bounds geometric gaps.
 - **Turn score**: Smoothed absolute bearing change at p_i, boosted by local variance for sharp turns.
-- **Stop score**: Duration-based score for low-speed regions (< 1 m/s for ≥ 30 s); duration is normalised across the trajectory.
+- **Stop score**: Duration-based score for low-speed regions (< 1 m/s for ≥ 30 s).
 - **Speed change score**: Smoothed |v_i − v_{i-1}|, capturing acceleration/deceleration events.
 - **Irregularity score**: Promotes points in sparse regions — min(Δt_i / (3 × median_Δt), 1.0).
 
-The top-k points by importance are selected (endpoints always included), then an optional geometric refinement pass inserts any points with perpendicular error > 5 m.
+Endpoints always receive importance 2.0. Top-k points are selected, then **adaptive geometric refinement** inserts worst-error gap points if error exceeds **max(2 m, 1% spatial diagonal)**.
 
 **Q: What is the Greedy Policy baseline and why did you add it?**
 
@@ -50,11 +52,11 @@ where `geo_dev` is the perpendicular deviation from the local chord, and `motion
 
 **Q: What is the complexity of your proposed algorithm?**
 
-**A**: Importance scoring (all 4 components) is O(n). Top-k selection is O(n log k). Geometric refinement is O(n × k) worst case but O(n) in practice for small k. The total is O(n log k) on average, comparable to DP's O(n log n) and much better than DP's O(n²) worst case.
+**A**: Importance scoring (all 5 components) is O(n). Top-k selection is O(n log k). Geometric refinement is O(n × k) worst case but O(n) in practice for small k. Total is O(n log k) on average.
 
-**Q: Why these specific weights (0.3, 0.3, 0.2, 0.2)?**
+**Q: Why these specific weights (0.20 / 0.25 / 0.25 / 0.15 / 0.15)?**
 
-**A**: Turns and stops are the dominant drivers of semantic quality — they have the most direct effect on route understanding and activity detection. Speed change and irregularity each contribute meaningfully but to a lesser degree individually. The 0.3/0.3/0.2/0.2 weighting reflects this hierarchy and performs well across diverse GeoLife trajectories.
+**A**: The geo component (0.20) prevents runaway Hausdorff when semantic points cluster spatially. Turn and stop (0.25 each) reflect the primary semantic objectives in the project brief. Speed and irregularity (0.15 each) capture mode transitions and sparse sampling without dominating the budget. Defaults are in `proposed_method.py`; they are not learned from data.
 
 ---
 
@@ -86,30 +88,27 @@ For **stop preservation**: identify all contiguous runs of points with speed < 1
 
 **Q: What are your main quantitative findings?**
 
-**A**: On real GeoLife GPS data:
-- The proposed method achieves **76.5% mean turn preservation** and **89.0% mean stop preservation** across all compression ratios — the only algorithm with any mechanism for semantic preservation.
-- At 2× compression: 96.9% turn, 100% stop preservation (near-perfect).
-- At 5× compression: 78.7% turn, 75.0% stop — competitive even under moderate compression.
-- The Greedy Policy (RL-inspired) achieves better geometric quality (238 m vs 373 m Hausdorff) and is 3.7× faster, but has no explicit stop/turn mechanism.
-- VW and SQUISH achieve the best geometric quality (116 m Hausdorff) but cannot preserve semantic features.
-- DP (4.1 s/trajectory) and SW (23.2 s/trajectory) are 23–129× slower than the proposed method on longer trajectories.
+**A**: On real GeoLife GPS data (batch benchmark, 2×/5×/10×):
+
+- **Geometric shape:** VW/RW win on Hausdorff, Fréchet, PED — **not** the proposed method.
+- **Time-synchronised motion:** Proposed wins on **SED** (~35 m at 5× vs ~340–550 m for baselines), **DAD**, and **SAD** — its strongest result.
+- **Semantic preservation:** Proposed only — ~90% turn/stop at 2×; ~43–57% at 10×. Baselines are not measured in the pipeline.
+- **Runtime:** ~0.45 s/trajectory (~2.2 traj/s) — batch-suitable, **not** real-time streaming.
+- **Do not claim “best overall.”** The method trades geometric error for movement/semantic fidelity.
 
 **Q: How do you justify the higher geometric error of your method?**
 
-**A**: Three reasons. First, GPS accuracy itself is 5–15 m, so differences between 116 m (VW) and 373 m (Proposed) Hausdorff distances are both well above GPS noise — the relevant question is semantic content, not sub-metre geometric accuracy. Second, Hausdorff is a worst-case metric; average errors (APTE) are much lower for all methods. Third, for the applications this method targets — route analysis, visit pattern detection, travel behaviour modelling — semantic preservation is more valuable than geometric precision. A 373 m Hausdorff distance that preserves 76.5% of turns is more useful than a 116 m Hausdorff distance that misses half the turns.
-
----
-
-### 10.1.5 Limitations and Future Work
+**A**: Three reasons. First, the method's **primary goal is movement/semantic preservation**, not geometric shape — VW achieves ~50 m Hausdorff at 5× vs ~332 m for proposed. Second, Hausdorff is worst-case; the proposed method wins decisively on **SED** (time-synchronised error). Third, for mobility analytics (stops, turns, mode changes), SED and semantic metrics matter more than global geometric tightness — but we do **not** claim geometric superiority.
 
 **Q: What are the limitations of your method?**
 
 **A**:
-1. **Geometric quality trade-off**: 3.2× higher Hausdorff distance than VW/SQUISH (373 m vs 116 m) — a deliberate trade-off for semantic preservation.
-2. **Stop preservation at 20× compression**: Drops from 75% at 10× to 25% at 20× — extreme compression can exhaust the budget before all stops are covered.
-3. **Weight parameter sensitivity**: Requires user-specified weights, though defaults (0.3/0.3/0.2/0.2) work well across diverse GeoLife trajectories.
-4. **No trained RL policy**: The Greedy Policy approximation is training-free; a fully trained RL model (Wang et al., 2021) could potentially perform better on the training distribution.
-5. **Semantic metrics only for proposed method**: Baseline algorithms do not return selected indices, preventing direct semantic metric comparison.
+1. **Not best on geometry** — VW/RW have lower Hausdorff/Fréchet/PED.
+2. **Semantic metrics only for proposed** — baselines don't export indices in the runner.
+3. **Single dataset** — GeoLife only in current results.
+4. **No 20× rows** in shipped `experiment_results.csv`.
+5. **Five fixed weights** — not learned; may need mode-specific tuning.
+6. **Batch scope only** — ~2 traj/s offline; real-time streaming not implemented.
 
 **Q: How would you extend this work?**
 
@@ -127,24 +126,24 @@ For **stop preservation**: identify all contiguous runs of points with speed < 1
 **Q: What are your main contributions?**
 
 **A**:
-1. A **unified multi-criteria importance scoring algorithm** that preserves turns, stops, speed changes, and irregularity simultaneously under fixed compression budgets.
-2. A **training-free RL-inspired Greedy Policy baseline** that approximates Wang et al. (2021) without requiring offline training, enabling fair comparison with learning-based methods.
-3. A **comprehensive evaluation** of 7 algorithms across 10+ metrics on real GeoLife GPS data.
-4. **Dataset characterisation** showing 87.4% of GeoLife trajectories have CV > 1.0 and 34.2% of points are stops — quantifying the mismatch between real data and classical-method assumptions.
+1. A **five-component importance scoring algorithm** (geo + turn + stop + speed + irregularity) under fixed compression budgets.
+2. A **training-free Greedy Policy baseline** approximating Wang et al. (2021).
+3. A **comprehensive evaluation** on **GeoLife only** across geometric, time-sync, semantic, and efficiency metrics.
+4. **Dataset characterisation** (CV = 5.96, 34.2% stops) motivating semantic-aware design.
 
 **Q: How is this different from existing work?**
 
-**A**: Existing work either: (a) focuses on a single semantic feature (e.g., Long et al. 2013 for stops only), (b) uses error thresholds rather than fixed budgets (DP, SW), (c) requires training data (RL-based methods, deep compression), or (d) lacks comprehensive evaluation across both geometric and semantic metrics (most prior work). Our method integrates all four semantic features in one framework, operates under fixed budgets, requires no training, and is evaluated with 10+ metrics including a novel training-free RL-inspired baseline for fair comparison.
+**A**: Existing work often uses (a) single semantic features, (b) error thresholds not fixed budgets, (c) training data, or (d) geometry-only evaluation. Our method integrates **five** scoring components under fixed budgets without training, and evaluates **both** geometric and time-sync metrics — showing the proposed method wins on **SED/semantic** metrics, not on Hausdorff.
 
 ---
 
 ## 10.2 Presentation Tips
 
-1. **Lead with numbers**: "76.5% turn preservation, 89% stop preservation — no other algorithm achieves this"
-2. **Show the figure**: `results/figures/trajectory_comparison.png` — point to where the proposed method keeps the stop cluster that DP misses
-3. **Be honest about trade-offs**: Acknowledge the 3.2× higher Hausdorff than VW; justify it in context of GPS accuracy and application needs
-4. **Reference the dataset stats**: CV = 5.96, 87.4% highly irregular — these numbers justify why a new method is needed
-6. **Relate to the proposal**: Map your contributions directly to the 4 objectives in the Yumeng.pdf proposal
+1. **Lead with the split:** VW/RW = geometric shape; Proposed = SED + turn/stop preservation.
+2. **Show the figure:** `trajectory_comparison.png` — stop cluster retained by proposed, tighter polyline from VW.
+3. **Be honest:** Proposed is **not** best overall; it wins on **time-aware and semantic** metrics.
+4. **Dataset stats:** CV = 5.96, 87.4% irregular — motivates irregularity score.
+5. **Scope:** Batch processing only; real-time is future work.
 
 ## 10.3 Practice Questions
 
@@ -152,8 +151,8 @@ For **stop preservation**: identify all contiguous runs of points with speed < 1
 2. How does your method differ from Douglas-Peucker?
 3. Why is the Greedy Policy baseline useful even though it's not a trained RL model?
 4. Why is semantic preservation important for GPS trajectories?
-6. How do you justify 373 m Hausdorff vs 116 m for VW?
-7. What would happen if you set all weights to zero?
+6. How do you justify higher Hausdorff for proposed vs VW (~332 m vs ~50 m at 5×)?
+7. What would happen if you set all semantic weights to zero?
 8. How does your method handle GPS noise?
-9. What is the throughput of your method, and is it sufficient for real-time use?
-10. If you had 6 more months, what would you do differently?
+9. What is the throughput (~2 traj/s), and is it sufficient for real-time use? *(No — batch only; potential for near-real-time is future work.)*
+10. Why does DP have low PED but high SED at 10×?

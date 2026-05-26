@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('partials/head', { title: title }) %>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<%- include('partials/navbar', { active: 'dashboard' }) %>
+
+<div class="page">
+
+  <div class="filter-bar">
+    <label>Algorithm
+      <select id="f-algo"><option value="">All algorithms</option></select>
+    </label>
+    <label>Compression Ratio
+      <select id="f-cr"><option value="">All ratios</option></select>
+    </label>
+    <label>User ID
+      <select id="f-user"><option value="">All users</option></select>
+    </label>
+    <button class="btn btn-primary" onclick="applyFilters()">Apply</button>
+    <button class="btn btn-outline" onclick="resetFilters()">Reset</button>
+  </div>
+
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Hausdorff Distance by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-hausdorff"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Fréchet Distance by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-frechet"></canvas></div>
+    </div>
+  </div>
+
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Stop Preservation by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-stop"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Turn Preservation by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-turn"></canvas></div>
+    </div>
+  </div>
+
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Average PTE by Compression Ratio</h3>
+      <div class="chart-wrap"><canvas id="chart-apte"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Mean Runtime (seconds)</h3>
+      <div class="chart-wrap"><canvas id="chart-runtime"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Summary Table — Mean metrics by algorithm × compression ratio</h3>
+    <div id="table-loading"><div class="spinner"></div></div>
+    <div class="table-wrap" id="summary-table" style="display:none"></div>
+  </div>
+
+</div>
+
+<script src="/js/dashboard.js"></script>
+</body>
+</html>

@@ -24,7 +24,7 @@ Trajectory simplification reduces the number of GPS points in a movement path wh
 
 This project implements six baseline simplification algorithms and one proposed method on the Microsoft GeoLife dataset. The proposed approach assigns each point a multi-criteria importance score combining turn significance, stop duration, speed-change magnitude, and sampling irregularity, then selects the top-k points under a fixed compression budget. A training-free Greedy Policy baseline, inspired by reinforcement-learning simplification (Wang et al., 2021), is included for comparison with learning-based methods.
 
-Dataset analysis of 5,716 preprocessed trajectories reveals mean sampling coefficient of variation 5.96, with 87.4% of trajectories exceeding CV = 1.0, and 34.2% of all points classified as stops. Experiments on ten GeoLife trajectories across compression ratios 2×, 5×, 10×, and 20× show that Visvalingam–Whyatt achieves the best mean Hausdorff distance (116 m) while the proposed method achieves 76.5% mean turn preservation and 89.0% mean stop preservation—the only algorithm with an explicit semantic mechanism. The proposed method runs at 0.18 s per trajectory (5.6 trajectories per second), 23× faster than Douglas–Peucker on long trajectories. The results demonstrate a deliberate and justified trade-off between geometric worst-case error and behavioural fidelity on real GPS data.
+Dataset analysis of 5,716 preprocessed trajectories reveals mean sampling coefficient of variation 5.96, with 87.4% of trajectories exceeding CV = 1.0, and 34.2% of all points classified as stops. Experiments on the **Microsoft GeoLife dataset only** (ten trajectories, compression ratios 2×, 5×, and 10×) show that Visvalingam–Whyatt and Reumann–Witkam achieve the best **global geometric** quality (Hausdorff, Fréchet, PED), while the proposed method achieves the best **time-synchronised and motion-profile** quality (SED, DAD, SAD) and the only measured turn/stop preservation scores. The proposed method is **not** best overall: it trades higher Hausdorff distance for movement/semantic fidelity. It runs at ~0.45 s per trajectory in the benchmark (~2.2 trajectories/second)—practical for **batch offline** processing, not implemented as a real-time streaming system.
 
 **Keywords:** trajectory simplification, GPS, GeoLife, semantic preservation, Douglas–Peucker, fixed compression budget, irregular sampling
 
@@ -73,15 +73,15 @@ The specific objectives are:
 
 1. To characterise sampling irregularity, stop density, and turn frequency in the GeoLife dataset and relate these properties to algorithm design requirements.
 2. To implement classical geometric baselines (DP, Sliding Window, VW, SQUISH, Reumann–Witkam) and a Greedy Policy baseline inspired by reinforcement-learning simplification, all operating under unified fixed budgets.
-3. To develop a multi-criteria importance-scoring algorithm that jointly considers turns, stops, speed changes, and sampling irregularity.
-4. To evaluate all methods using geometric, time-synchronised, semantic, and efficiency metrics following established experimental practice (Zhang et al., 2018).
+3. To develop a multi-criteria importance-scoring algorithm that jointly considers **geometric deviation**, turns, stops, speed changes, and sampling irregularity — optimising **movement/semantic preservation** with bounded geometric error, not global geometric shape alone.
+4. To evaluate all methods using geometric, time-synchronised, semantic, and efficiency metrics — reporting **which metric family each algorithm wins**, not a single “best overall” claim.
 5. To analyse trade-offs between geometric error and semantic preservation and to assess practical scalability.
 
 ### 1.4 Contributions
 
 This report presents the following contributions:
 
-1. **A novel fixed-budget simplification algorithm** combining turn, stop, speed-change, and irregularity scores with optional geometric refinement.
+1. **A novel fixed-budget simplification algorithm** combining geometric deviation, turn, stop, speed-change, and irregularity scores with adaptive geometric refinement.
 2. **A training-free Greedy Policy baseline** mirroring the per-point decision structure of Wang et al. (2021) without neural network training.
 3. **A comprehensive empirical study** of seven algorithms (six simplifiers plus passthrough reference) on preprocessed GeoLife data across four compression ratios and more than ten evaluation metrics.
 4. **Quantitative dataset characterisation** motivating semantic-aware design (CV = 5.96, 34.2% stop points, 32.4% turn points).
@@ -119,7 +119,7 @@ Zhang et al. (2018) conducted a large-scale experimental comparison showing that
 
 Existing work typically addresses one gap at a time: geometry *or* stops *or* irregularity *or* learning, and often uses error thresholds rather than fixed budgets. Real GeoLife data simultaneously exhibits extreme irregularity, dense stops, and frequent turns. This project addresses the gap by:
 
-- Integrating **four semantic/geometric cues** in one importance function under a **fixed point budget**;
+- Integrating **five scoring components** (geometric deviation, turn, stop, speed change, irregularity) in one importance function under a **fixed point budget**;
 - Providing **deterministic, training-free** simplification suitable for reproducible research;
 - Comparing against **six strong baselines** including an RL-inspired greedy policy on **identical** trajectories, budgets, and metrics.
 
@@ -216,16 +216,21 @@ The proposed method operates in three stages: **importance scoring**, **top-k se
 
 #### 4.3.1 Importance Scoring
 
-Each point p_i receives a score in [0, 1] from four components, combined with default weights w_turn = 0.30, w_stop = 0.30, w_speed = 0.20, w_irregular = 0.20:
+Each point p_i receives a score in [0, 1] from **five** components, combined with default weights that sum to 1 (`src/algorithms/proposed_method.py`):
 
 ```
-importance(p_i) = w_turn · turn_score(i)
-                + w_stop · stop_score(i)
-                + w_speed · speed_change_score(i)
-                + w_irregular · irregularity_score(i)
+importance(p_i) = w_geo      × geo_score(i)
+                + w_turn     × turn_score(i)
+                + w_stop     × stop_score(i)
+                + w_speed    × speed_change_score(i)
+                + w_irregular × irregularity_score(i)
 ```
 
-**Turn score.** Segment bearings are computed using the Haversine azimuth formula. Direction change Δθ_i is the smaller angle between consecutive bearings. Values are smoothed with a sliding window (width 3) to reduce GPS jitter, normalised across the trajectory, and boosted where local variance indicates a sharp turn. Turns are semantically defined as Δθ ≥ 30°.
+Default weights: **w_geo = 0.20, w_turn = 0.25, w_stop = 0.25, w_speed = 0.15, w_irregular = 0.15**.
+
+**Geometric deviation score.** Perpendicular distance from p_i to the chord (p_{i−1}, p_{i+1}), normalised by the maximum such distance in the trajectory. Endpoints receive score 1.0. This prevents purely semantic selection from leaving large geometric gaps.
+
+**Turn score.** Segment bearings are computed using the Haversine azimuth formula. Direction change Δθ_i is the smaller angle between consecutive bearings. Values are smoothed with a sliding window (width 3) to reduce GPS jitter, normalised across the trajectory, and boosted where local variance indicates a sharp turn. Turns are semantically defined as Δθ ≥ 30° in evaluation.
 
 **Stop score.** Instantaneous speed is distance over time interval. Stop regions are contiguous runs with speed < 1.0 m/s. Points in regions lasting at least 30 seconds receive higher scores proportional to normalised duration, capped at 1.0. Duration-based scoring avoids classifying single noisy samples as stops.
 
@@ -241,11 +246,13 @@ with score 1.0 when Δt_i > 5 · median_Δt. This promotes points after long gap
 
 #### 4.3.2 Selection and Refinement
 
-Endpoints p_0 and p_{n−1} receive importance 1.0. The k indices with highest importance are selected and sorted temporally. **Geometric refinement** optionally scans consecutive retained pairs; if the maximum perpendicular error among intermediate points exceeds 5 m and budget allows, the worst-error point is inserted; if budget is exceeded, least important interior points are removed.
+Endpoints p_0 and p_{n−1} receive importance 2.0 (always retained). The k indices with highest importance are selected and sorted temporally. **Adaptive geometric refinement** scans consecutive retained pairs; if the maximum perpendicular error among intermediate points exceeds **max(2 m, 1% of the trajectory spatial diagonal)** and budget allows, the worst-error point is inserted; if budget is exceeded, least important interior points are removed.
 
 #### 4.3.3 Complexity and Rationale
 
 Scoring is O(n); top-k selection is O(n log k); refinement is O(n·k) worst case. Total average complexity is O(n log k). The method handles irregular sampling because irregularity is an explicit term; noise because turn and speed scores are smoothed and stops require duration; semantics because turns and stops are scored directly rather than inferred from geometry alone.
+
+**Primary design goal:** preserve **movement and semantic behaviour** (turns, stops, speed changes, sparse samples) under a fixed budget, while bounding worst-case geometric gaps via the geo component and refinement pass—not to minimise global geometric shape error.
 
 Implementation: `src/algorithms/proposed_method.py`. Baselines: `src/algorithms/baseline_algorithms.py`.
 
@@ -291,15 +298,20 @@ Wall-clock **runtime** (seconds), **peak memory** (MB via `tracemalloc`), and **
 
 | Parameter | Value |
 |-----------|-------|
-| Dataset | Preprocessed GeoLife (`data/processed/trajectories.pkl`) |
+| Dataset | Preprocessed GeoLife only (`data/processed/trajectories.pkl`) |
 | Trajectories in main benchmark | 10 (first ten in pickle order) |
-| Trajectory size in benchmark | 95–209 points |
+| Trajectory size in benchmark | 95–888 points |
 | Algorithms | DP, VW, SQUISH, RW, Greedy Policy, Proposed |
-| Compression ratios | 2×, 5×, 10×, 20× |
-| Total experiment rows | 10 × 6 × 4 = **240** |
-| Proposed weights | 0.30 / 0.30 / 0.20 / 0.20 |
+| Compression ratios evaluated | 2×, 5×, 10× (20× supported by runner but not present in current `experiment_results.csv`) |
+| Total experiment rows (current file) | 300 (mixed runs; headline tables use CR ≈ 2/5/10) |
+| Proposed weights (defaults in code) | geo 0.20 / turn 0.25 / stop 0.25 / speed 0.15 / irregular 0.15 |
 | GP α | 0.5 |
-| Geometric refinement threshold | 5.0 m |
+| Geometric refinement threshold | max(2 m, 1% spatial diagonal) |
+| Stop speed threshold | 1.0 m/s (`STOP_SPEED_THRESHOLD_MS`) |
+| Min stop duration | 30 s (`MIN_STOP_DURATION_S`) |
+| Preprocess speed cap | 80 m/s (`MAX_VALID_SPEED_MS`; raw filter uses 200 m/s) |
+| Binary search (DP, AT, RW) | 20 iterations; ε ∈ [0, 1000] m |
+| Min trajectory length | 100 points (preprocessing) |
 
 Sliding Window and passthrough `original` are implemented but omitted from the 240-row benchmark because SW is prohibitively slow and `original` is not a simplifier. DP and SW timings on longer trajectories are reported separately in scalability discussion.
 
@@ -324,108 +336,111 @@ Experiments were run in Python 3.9+ with NumPy, Pandas, and SciPy on a single-th
 
 ## 7. Results
 
-### 7.1 Geometric Quality
+> **Data source:** `results/experiment_results.csv` — GeoLife only, batch pipeline. Values below are means across trajectories at each target compression ratio (2×, 5×, 10×). Semantic metrics are computed **only for the proposed method** because it is the only algorithm that returns selected indices in the runner.
 
-Table 7.1 summarises mean Hausdorff and Fréchet distances in metres across all compression ratios in the main benchmark.
+### 7.1 Geometric Quality (Hausdorff, Fréchet, PED)
 
-**Table 7.1 — Mean geometric error (all compression ratios)**
+**Table 7.1 — Mean geometric error (metres)**
 
-| Algorithm | Hausdorff (m) | Fréchet (m) |
-|-----------|---------------|-------------|
-| VW | **116.1** | **118.4** |
-| SQUISH | **116.1** | **118.4** |
-| RW | 128.3 | 132.4 |
-| Greedy Policy | 238.3 | 259.0 |
-| Proposed | 372.6 | 405.0 |
+| Algorithm | Hausdorff 2× | Hausdorff 5× | Hausdorff 10× | Fréchet 5× | PED 5× |
+|-----------|-------------|-------------|--------------|-----------|--------|
+| VW / SQUISH | **25** | **50** | **83** | **50** | **1.6** |
+| RW | 37 | 38 | 84 | 44 | 2.9 |
+| Greedy Policy | 134 | 178 | 523 | 298 | 5.8 |
+| Proposed | 195 | 332 | 316 | 370 | 16.8 |
+| DP | 368 | 188 | 254 | 252 | 1.5 |
 
-VW and SQUISH achieve the lowest geometric error because area-based removal directly minimises local geometric footprint. The proposed method has approximately **3.2×** higher mean Hausdorff distance than VW/SQUISH. This is expected: the proposed method retains points for semantic reasons even when they are not geometrically extreme.
+**VW, SQUISH, and RW achieve the best global geometric quality** — lowest Hausdorff, Fréchet, and PED. The proposed method ranks **worst or near-worst** on these metrics because it prioritises temporal/semantic points over geometric extremes. This is expected and does **not** mean the method is “best overall.”
 
-![Figure 7.1 — Error metrics versus compression ratio](../results/figures/compression_error_curves.png)
+**Douglas–Peucker interpretation:** DP can show **low PED** (good perpendicular fit to retained segments) while still having **high SED** (poor time-synchronised reconstruction) because geometrically chosen points may not align with timestamps of removed events.
 
-**Figure 7.1.** Multi-panel curves from 2× to 10× compression. VW, SQUISH, and RW dominate geometric panels; only the proposed method appears in the turn-preservation panel.
+### 7.2 Time-Synchronised and Motion Metrics (SED, DAD, SAD)
 
-Hausdorff increases for all methods as compression ratio increases. The proposed method’s curve rises more steeply because at 20× compression few points remain and semantically important locations compete for the same budget.
+**Table 7.2 — Mean time-synchronised error**
 
-### 7.2 Semantic Preservation
+| Algorithm | SED 2× | SED 5× | SED 10× | DAD 5× | SAD 5× |
+|-----------|--------|--------|---------|--------|--------|
+| **Proposed** | **4.7** | **35.3** | **39.2** | **40.2** | **0.53** |
+| VW / SQUISH | 555 | 424 | 388 | 87.0 | 1.13 |
+| RW | 568 | 547 | 356 | 79.5 | 1.20 |
+| Greedy Policy | 556 | 343 | 645 | 84.4 | 1.37 |
+| DP | 377 | 337 | 585 | 81.6 | 1.23 |
 
-Table 7.2 reports turn and stop preservation for the **proposed method only**.
+The proposed method achieves the **lowest SED, DAD, and SAD** at all three compression ratios. SED values for baselines are in the **hundreds of metres** because linear interpolation between geometrically chosen points poorly reconstructs motion at original timestamps. Proposed SED stays in the **single-digit to low-tens of metres** range at 2×–10× because retained points coincide with stops, turns, and irregular samples.
 
-**Table 7.2 — Proposed method semantic preservation**
+**Note on ISSD:** Integrated square speed difference (ISSD) aggregates squared speed errors over trajectory duration and can reach very large magnitudes (10⁴–10⁷) for all algorithms; it is reported in the CSV but is dominated by a few long-gap trajectories. SED is the primary time-aware scalar used for comparison.
+
+### 7.3 Semantic Preservation (Proposed Only)
+
+**Table 7.3 — Turn and stop preservation (proposed method)**
 
 | Compression ratio | Turn preservation | Stop preservation |
 |-------------------|-------------------|-------------------|
-| 2× | 96.9% | 100% |
-| 5× | 78.7% | 75.0% |
-| 10× | 76.6% | 75.0% |
-| 20× | 40.4% | 25.0% |
-| **Mean** | **76.5%** | **89.0%** |
+| 2× | 90.2% | 91.7% |
+| 5× | 59.8% | 68.7% |
+| 10× | 42.7% | 57.1% |
 
-No baseline algorithm in the pipeline exports selected indices; geometric methods do not optimise turn or stop preservation. At 2× compression the proposed method preserves nearly all turns and stops. At 20×, stop preservation falls to 25% because the budget cannot cover all significant stop regions—a limitation identified for future stop-quota mechanisms.
+No baseline algorithm exports selected indices in `run_experiments.py`, so **turn/stop preservation is not measured for VW, RW, or GP** in the automated pipeline. Claims that baselines “lose X% of stops” are not supported by the current evaluation code.
 
-![Figure 7.2 — Metric comparison at 5× compression](../results/figures/metric_comparison_5x.png)
+### 7.4 Runtime
 
-**Figure 7.2.** Bar charts at 5× compression: geometric panels favour VW/SQUISH/RW; turn and stop panels show values only for the proposed method.
+**Table 7.4 — Mean runtime (seconds per trajectory)**
 
-### 7.3 Comparison with Greedy Policy
+| Algorithm | 2× | 5× | 10× |
+|-----------|-----|-----|------|
+| Greedy Policy | 0.13 | 0.22 | 0.07 |
+| RW | 0.37 | 0.58 | 0.16 |
+| Proposed | 0.40 | 0.73 | 0.24 |
+| VW | 2.3 | 10.8 | 0.8 |
+| DP | 7.3 | 6.7 | 0.8 |
 
-Greedy Policy achieves better geometric quality (238 m Hausdorff) and lower runtime (0.049 s) than the proposed method (373 m, 0.180 s) but provides no measured turn or stop preservation in the batch pipeline. GP is a strong choice when motion-sensitive geometry and speed are priorities; the proposed method is preferable when explicit semantic guarantees matter.
-
-### 7.4 Runtime and Scalability
-
-**Table 7.3 — Mean runtime and throughput (main benchmark)**
-
-| Algorithm | Runtime (s) | Throughput (traj/s) |
-|-----------|-------------|---------------------|
-| Greedy Policy | 0.049 | ~20 |
-| RW | 0.069 | ~14 |
-| VW | 0.165 | ~6 |
-| Proposed | 0.180 | **5.6** |
-| SQUISH | 0.229 | ~4 |
-
-On longer trajectories in a separate reference run, DP averaged 4.1 s and SW 23.2 s per trajectory—**23× and 129× slower** than the proposed method respectively. Processing all 5,716 preprocessed trajectories with the proposed method at 0.18 s each requires approximately 17 minutes single-threaded.
-
-![Figure 7.3 — Runtime versus trajectory size](../results/figures/runtime_scalability.png)
-
-**Figure 7.3.** Log-log scalability plot: proposed, RW, and Greedy Policy scale approximately linearly; DP shows steeper growth.
-
-Peak memory for all algorithms remains below 0.5 MB per trajectory; the proposed method uses about 0.030 MB.
+The proposed method is practical for **batch offline** processing (~0.5 s/trajectory mean) but is **not implemented or evaluated as a real-time streaming system**. Scope is batch simplification via `run_experiments.py`.
 
 ### 7.5 Qualitative Comparison
 
 ![Figure 7.4 — Trajectory comparison at 5× compression](../results/figures/trajectory_comparison.png)
 
-**Figure 7.4.** Same GeoLife trajectory simplified at 5× by DP, VW, RW, Greedy Policy, and the proposed method. Douglas–Peucker concentrates points on geometric extremes and under-represents the stop cluster (dense region, top-right). The proposed method visibly retains points at that stop cluster and at major turns, accepting sparser sampling along straight segments. This figure is the clearest visual evidence that semantic preservation requires explicit scoring, not incidental geometric optimisation.
+**Figure 7.4.** At 5× compression, VW/RW produce tighter geometric polylines; the proposed method retains more points at stop clusters and turns at the cost of higher Hausdorff distance. This illustrates **movement/semantic preservation**, not superior **geometric shape** preservation.
 
 ---
 
 ## 8. Discussion
 
-### 8.1 Interpretation of the Geometric–Semantic Trade-off
+### 8.1 Geometric Shape vs Movement/Semantic Preservation
 
-The central empirical finding is that **geometric optimality and semantic preservation diverge** on real GeoLife data. VW and SQUISH minimise Hausdorff distance but provide no mechanism to retain turns or stops. The proposed method achieves 76.5% turn and 89.0% stop preservation at the cost of higher worst-case geometric error.
+The central empirical finding is a **metric-dependent trade-off**:
 
-This trade-off is justified for many applications. Consumer GPS error is already 5–15 m; Hausdorff distances of 116 m and 373 m are both large relative to sensor noise. For route understanding, visit detection, and behavioural analytics, losing stop regions and turn events is more damaging than increasing average geometric deviation. Hausdorff measures a single worst case per trajectory; average errors (APTE) for the proposed method are substantially lower than the Hausdorff figure suggests.
+- **Geometric shape** (Hausdorff, Fréchet, PED): VW, SQUISH, and RW win. The proposed method is **not** the most shape-preserving algorithm.
+- **Movement / time-aware fidelity** (SED, DAD, SAD): the proposed method wins decisively.
+- **Explicit turn/stop retention** (semantic metrics): only the proposed method is measured; it preserves ~90% of turns/stops at 2×, declining to ~43–57% at 10×.
 
-### 8.2 Irregular Sampling
+Do **not** claim the proposed method is “best overall.” State instead that it is **best for time-synchronised and semantic objectives**, at the cost of higher global geometric error.
 
-The dataset analysis shows that irregular sampling is not an edge case but the **default condition** (87.4% of trajectories with CV > 1). The irregularity score in the proposed method is a direct response. Geometric baselines cannot distinguish a point after a long gap from a point in a dense cluster; the proposed method can, without requiring map matching or mode detection.
+### 8.2 Interpreting DP and Geometric Baselines
 
-### 8.3 Role of the Greedy Policy Baseline
+DP is **not** uniformly “high distortion.” At 10× it can achieve **low PED** (~4 m) because retained points fit local chords well. However, its **SED remains high** (~585 m) because time-synchronised positions are poorly reconstructed. Evaluation must use **multiple metric families**—geometry alone is insufficient.
 
-The Greedy Policy connects this work to the reinforcement-learning simplification literature while remaining reproducible and training-free. Its strong geometric performance and speed demonstrate that motion-aware scoring adds value over pure geometry; the proposed method’s superior semantic metrics demonstrate that **explicit stop and turn modelling** adds value over GP’s combined motion score.
+### 8.3 Irregular Sampling
 
-### 8.4 Limitations
+Irregular sampling is the default condition in GeoLife (87.4% of trajectories with CV > 1). The irregularity score directly promotes post-gap points; geometric baselines cannot distinguish them from dense-cluster points.
 
-1. **Geometric accuracy** — Not suitable for applications requiring sub-50 m worst-case fidelity without hybrid post-processing.  
-2. **Extreme compression** — Stop preservation collapses at 20×; a stop-quota extension is needed.  
-3. **Fixed weights** — Weights 0.3/0.3/0.2/0.2 are not learned from data; transportation-mode-specific tuning may improve results.  
-4. **Semantic metrics for baselines** — Index tracking should be added to all algorithms for fully fair semantic comparison.  
-5. **Benchmark size** — Ten trajectories suffice for controlled comparison but broader sampling would strengthen statistical claims; Wilcoxon tests are recommended future work.  
-6. **No trained RL policy** — Comparison is to a greedy approximation, not a fully trained Wang et al. (2021) model.
+### 8.4 Role of the Greedy Policy Baseline
 
-### 8.5 Threats to Validity
+GP combines geometric deviation and motion change without explicit stop duration or irregularity modelling. It is faster than the proposed method and competitive on some geometric metrics, but it does not export indices for semantic evaluation in the current pipeline.
 
-Results are specific to GeoLife (urban China, pedestrian-heavy, daily logs). Generalisation to highway fleet data or animal tracking requires additional datasets. Binary-search budget matching for ε-based algorithms introduces minor deviation from exact budget k. Semantic metrics depend on threshold choices (30° turns, 1 m/s stops, 30 s duration).
+### 8.5 Limitations
+
+1. **Geometric accuracy** — VW/RW preferred when sub-50 m worst-case Hausdorff is required.  
+2. **Single dataset** — All results are GeoLife-only; no taxi/fleet/AIS evaluation in this report.  
+3. **No 20× rows in current CSV** — Runner supports 20×, but the shipped results file contains 2×/5×/10× only.  
+4. **Semantic metrics for baselines** — Index tracking not implemented for baselines; fair semantic comparison requires future work.  
+5. **Batch scope only** — No real-time streaming implementation; throughput (~2 traj/s) is adequate for offline batches, not proven for live GPS.  
+6. **Fixed weights** — Five default weights in code; not learned from data.  
+7. **No web dashboard in evaluation** — OSM map scripts exist for visualisation but are not part of the quantitative benchmark.
+
+### 8.6 Threats to Validity
+
+Results are specific to GeoLife (urban China, pedestrian-heavy). Semantic thresholds (30° turns, 1 m/s stops, 30 s duration) affect preservation scores. ISSD magnitudes vary widely and should be interpreted cautiously alongside SED.
 
 ---
 
@@ -433,15 +448,15 @@ Results are specific to GeoLife (urban China, pedestrian-heavy, daily logs). Gen
 
 ### 9.1 Conclusion
 
-This project set out to simplify GPS trajectories under irregular sampling and noise while preserving semantically important behaviour. Analysis of 5,716 GeoLife trajectories established that real data violates classical regular-sampling assumptions and contains dense stop and turn structure. A multi-criteria importance-scoring algorithm was designed and compared against six baselines under fixed compression budgets.
+This project simplifies GPS trajectories under irregular sampling while **explicitly scoring movement semantics** (turns, stops, speed changes, sampling gaps) plus geometric deviation. On GeoLife batch experiments at 2×–10× compression:
 
-The proposed method is the only algorithm in the study with explicit turn, stop, speed-change, and irregularity scoring. It achieves **76.5%** mean turn preservation and **89.0%** mean stop preservation across compression ratios 2×–20×, at **0.18 s** per trajectory, while geometric leaders VW and SQUISH achieve **116 m** mean Hausdorff distance compared with **373 m** for the proposed method. The Greedy Policy baseline demonstrates that motion-aware simplification without training is fast and geometrically competitive but does not replace dedicated semantic scoring.
-
-The work confirms that trajectory simplification for modern GPS analytics must be evaluated on **more than geometry alone**, and that semantic preservation under fixed budgets is achievable in practice without neural network training.
+- **VW/RW** → best **geometric shape** (Hausdorff, Fréchet, PED).  
+- **Proposed** → best **time-synchronised and motion metrics** (SED, DAD, SAD) and the only algorithm with measured turn/stop preservation (~90% at 2×; ~43–57% at 10×).  
+- The proposed method is **not** best overall; it targets applications where **movement behaviour matters more than global geometric tightness**.
 
 ### 9.2 Future Work
 
-Short-term extensions include adaptive weight learning, guaranteed stop quotas per region, index export for all baselines, and statistical significance testing on a larger trajectory sample. Medium-term work should train a full RL policy on GeoLife and compare against the Greedy Policy approximation. Task-oriented evaluation—measuring simplified trajectories on clustering, travel-time estimation, and anomaly detection—would validate semantic metrics against downstream utility. Additional datasets (taxi, fleet, AIS) would test generalisation. Online and streaming variants would support real-time mobile applications.
+Short-term: stop-quota enforcement, index export for all baselines, statistical tests on a larger GeoLife sample, and re-running 20× compression into `experiment_results.csv`. Medium-term: task-oriented evaluation (clustering, travel-time estimation), full RL policy training, and additional datasets. Online/streaming variants are **potential** future work—not claimed as implemented here.
 
 ---
 

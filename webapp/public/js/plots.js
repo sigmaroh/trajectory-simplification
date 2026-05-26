@@ -383,6 +383,11 @@ async function reloadAll() {
 
 // ─── init ─────────────────────────────────────────────────────────────────────
 (async () => {
-  await loadFilters();
-  await reloadAll();
+  try {
+    await loadFilters();
+    await reloadAll();
+  } catch (err) {
+    console.error('Plots load failed:', err);
+    document.getElementById('plot-status').textContent = `Error: ${err.message}`;
+  }
 })();

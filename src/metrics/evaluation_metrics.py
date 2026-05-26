@@ -498,6 +498,65 @@ def integrated_synchronized_spatial_distance(instantaneous_distances: np.ndarray
     return float(np.trapezoid(instantaneous_distances, query_time_sec))
 
 
+def infer_original_indices(original: pd.DataFrame,
+                           simplified: Union[np.ndarray, pd.DataFrame, List],
+                           atol: float = 1e-9) -> List[int]:
+    """
+    Map each simplified point to an index in the original trajectory.
+
+    Baseline simplifiers do not return kept-point indices. This helper recovers
+    a monotonic index list so semantic metrics (turn/stop preservation) can be
+    computed for all algorithms.
+
+    Args:
+        original: Original trajectory DataFrame with lat/lon columns
+        simplified: Simplified trajectory (N x 2) or DataFrame
+        atol: Coordinate tolerance for exact matches
+
+    Returns:
+        Monotonically increasing list of original indices, one per simplified point
+    """
+    orig = original[['lat', 'lon']].values.astype(float)
+    simp = np.asarray(simplified, dtype=float)
+    if simp.ndim == 1:
+        simp = simp.reshape(-1, 2)
+    elif simp.shape[1] > 2:
+        simp = simp[:, :2]
+
+    n, m = len(orig), len(simp)
+    if m == 0:
+        return []
+    if m == 1:
+        return [int(np.argmin(np.sum((orig - simp[0]) ** 2, axis=1)))]
+    if m >= n:
+        return list(range(n))
+
+    indices = [0]
+    cursor = 0
+
+    for k in range(1, m - 1):
+        min_j = cursor + 1
+        max_j = n - (m - k)
+        if min_j > max_j:
+            j = min_j
+        else:
+            window = orig[min_j:max_j + 1]
+            pt = simp[k]
+            exact = np.where(
+                (np.abs(window[:, 0] - pt[0]) <= atol)
+                & (np.abs(window[:, 1] - pt[1]) <= atol)
+            )[0]
+            if len(exact) > 0:
+                j = min_j + int(exact[0])
+            else:
+                j = min_j + int(np.argmin(np.sum((window - pt) ** 2, axis=1)))
+        indices.append(j)
+        cursor = j
+
+    indices.append(n - 1)
+    return indices
+
+
 def compute_all_metrics(original: pd.DataFrame,
                        simplified: np.ndarray,
                        original_indices: List[int] = None) -> Dict:

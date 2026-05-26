@@ -90,23 +90,6 @@ body {
 .btn-outline { background: #fff; color: var(--primary); border: 1.5px solid var(--primary); }
 .btn-outline:hover { background: #eff6ff; }
 
-/* ── stat cards ── */
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: .9rem;
-  margin-bottom: 1.25rem;
-}
-.stat-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem 1.1rem;
-}
-.stat-card .label { font-size: .75rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-.stat-card .value { font-size: 1.55rem; font-weight: 700; margin-top: .2rem; }
-.stat-card .sub   { font-size: .72rem; color: var(--text-muted); margin-top: .15rem; }
-
 /* ── cards / panels ── */
 .card {
   background: var(--surface);

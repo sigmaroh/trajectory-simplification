@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en" class="map-page">
+<head>
+  <%- include('partials/head', {
+    title: title,
+    extraCss: ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', '/css/map.css']
+  }) %>
+</head>
+<body class="map-page">
+
+<%
+  var maps = (typeof baseMaps !== 'undefined' && baseMaps) ? baseMaps : [
+    { id: 'osm',   label: 'OpenStreetMap', default: true },
+    { id: 'carto', label: 'Carto Light' },
+    { id: 'dark',  label: 'Dark' },
+    { id: 'esri',  label: 'Esri Grey' },
+  ];
+%>
+
+<%- include('partials/navbar', { active: 'map' }) %>
+
+<div class="map-wrap">
+  <div id="map"></div>
+</div>
+
+<!-- Bottom-left: error metrics table -->
+<div class="osm-overlay osm-metrics-panel" id="metrics-panel">
+  <div class="osm-panel-title">Error Metrics (per trajectory &amp; algorithm)</div>
+  <div class="osm-metrics-scroll">
+    <table id="metrics-overlay-table">
+      <thead>
+        <tr>
+          <th>Ratio</th>
+          <th>Traj</th>
+          <th>Algo</th>
+          <th class="num">Hausdorff (m)</th>
+          <th class="num">Fréchet (m)</th>
+          <th class="num">APTE (m)</th>
+        </tr>
+      </thead>
+      <tbody id="metrics-overlay-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="osm-overlay osm-control-panel" id="ratio-panel">
+  <label for="ratio-select" class="osm-label">Compression</label>
+  <select id="ratio-select">
+    <% compressionRatios.forEach(function(cr) { %>
+    <option value="<%= cr.label %>"<%= cr.value === 5 ? ' selected' : '' %>><%= cr.label %></option>
+    <% }); %>
+  </select>
+</div>
+
+<div class="osm-overlay osm-control-panel" id="trajectory-panel">
+  <label for="trajectory-select" class="osm-label">Trajectory</label>
+  <select id="trajectory-select">
+    <option value="">Loading…</option>
+  </select>
+</div>
+
+<div class="osm-overlay osm-layer-panel" id="layer-panel">
+  <div class="osm-panel-title">Visible Layers</div>
+  <div id="layer-list-card"><div class="osm-muted">Select a trajectory.</div></div>
+</div>
+
+<div class="osm-overlay osm-basemap-panel" id="basemap-panel">
+  <label for="basemap-select" class="osm-label">Basemap</label>
+  <select id="basemap-select">
+    <% maps.forEach(function(b) { %>
+    <option value="<%= b.id %>"<%= b.default ? ' selected' : '' %>><%= b.label %></option>
+    <% }); %>
+  </select>
+</div>
+
+<div class="osm-overlay osm-legend-panel" id="legend-panel">
+  <div class="osm-panel-title">Algorithm Legend</div>
+  <div id="algo-legend-body">
+    <% defaultAlgorithms.forEach(function(a) { %>
+    <div class="legend-row">
+      <span class="legend-swatch" style="background:<%= a.color %>"></span>
+      <span><%= a.label %></span>
+    </div>
+    <% }); %>
+  </div>
+</div>
+
+<div class="osm-status" id="map-status"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  window.MAP_CONFIG = {
+    defaultAlgorithms: <%- JSON.stringify(defaultAlgorithms) %>,
+    compressionRatios: <%- JSON.stringify(compressionRatios) %>,
+    baseMaps: <%- JSON.stringify(maps) %>,
+  };
+</script>
+<script src="/js/map.js"></script>
+</body>
+</html>

@@ -20,9 +20,7 @@ from src.algorithms.baseline_algorithms import simplify_with_budget
 from src.algorithms.proposed_method import proposed_simplification
 from src.metrics.evaluation_metrics import (
     compute_all_metrics,
-    hausdorff_distance as _hausdorff,
-    frechet_distance as _frechet,
-    average_point_to_trajectory_error as _apte,
+    infer_original_indices,
 )
 
 ALGORITHM_COLORS = {
@@ -159,6 +157,11 @@ def add_metrics_overlay(
         ("hausdorff_distance", "Hausdorff (m)"),
         ("frechet_distance", "Fréchet (m)"),
         ("average_pte", "APTE (m)"),
+        ("ped", "PED (m)"),
+        ("sed", "SED (m)"),
+        ("dad", "DAD (°)"),
+        ("sad", "SAD (m/s)"),
+        ("issd", "ISSD"),
     ]
 
     rows_html = []
@@ -671,21 +674,22 @@ def create_osm_comparison_map(
 
                     algo_key = algorithm.lower()
 
-                    # Compute HD / Fréchet / APTE first so tooltip can show them
-                    hd = fd = apt = float("nan")
+                    metrics = {}
                     if algo_key not in {"original", "none"}:
-                        MAX_METRIC_PTS = 120
-                        orig_pts = traj[["lat", "lon"]].values
-                        simp_pts = simplified
-                        if len(orig_pts) > MAX_METRIC_PTS:
-                            keep_o = np.linspace(0, len(orig_pts) - 1, MAX_METRIC_PTS, dtype=int)
-                            orig_pts = orig_pts[keep_o]
-                        if len(simp_pts) > MAX_METRIC_PTS:
-                            keep_s = np.linspace(0, len(simp_pts) - 1, MAX_METRIC_PTS, dtype=int)
-                            simp_pts = simp_pts[keep_s]
-                        hd  = _hausdorff(orig_pts, simp_pts)
-                        fd  = _frechet(orig_pts, simp_pts)
-                        apt = _apte(orig_pts, simp_pts)
+                        MAX_METRIC_PTS = 200
+                        metric_traj = traj
+                        metric_simplified = simplified
+                        if len(metric_traj) > MAX_METRIC_PTS:
+                            keep_o = np.linspace(0, len(metric_traj) - 1, MAX_METRIC_PTS, dtype=int)
+                            metric_traj = metric_traj.iloc[keep_o].reset_index(drop=True)
+                        if len(metric_simplified) > MAX_METRIC_PTS:
+                            keep_s = np.linspace(0, len(metric_simplified) - 1, MAX_METRIC_PTS, dtype=int)
+                            metric_simplified = metric_simplified[keep_s]
+                        metrics = compute_all_metrics(
+                            metric_traj,
+                            metric_simplified,
+                            original_indices=infer_original_indices(metric_traj, metric_simplified),
+                        )
 
                     path = downsample_path(simplified[:, 0], simplified[:, 1], max_points=max_points_per_trajectory)
                     color = ALGORITHM_COLORS.get(algorithm.lower(), fallback_colors[traj_index % len(fallback_colors)])
@@ -702,9 +706,13 @@ def create_osm_comparison_map(
                         tooltip_text = (
                             f"<b>{algo_key.upper()}</b> — T{traj_id:04d} | {ratio:.2f}× CR<br>"
                             f"Points: {len(path)}<br>"
-                            f"Hausdorff: {_fmt(hd)} m<br>"
-                            f"<b>Fréchet: {_fmt(fd)} m</b><br>"
-                            f"APTE: {_fmt(apt)} m"
+                            f"Hausdorff: {_fmt(metrics.get('hausdorff_distance', np.nan))} m<br>"
+                            f"<b>Fréchet: {_fmt(metrics.get('frechet_distance', np.nan))} m</b><br>"
+                            f"APTE: {_fmt(metrics.get('average_pte', np.nan))} m<br>"
+                            f"PED: {_fmt(metrics.get('ped', np.nan))} m<br>"
+                            f"SED: {_fmt(metrics.get('sed', np.nan))} m<br>"
+                            f"DAD: {_fmt(metrics.get('dad', np.nan))}°<br>"
+                            f"SAD: {_fmt(metrics.get('sad', np.nan))} m/s"
                         )
 
                     folium.PolyLine(
@@ -728,14 +736,14 @@ def create_osm_comparison_map(
                             "trajectory_id": f"T{traj_id:04d}",
                             "algorithm": algorithm,
                             "layer_label": layer_name,
-                            "hausdorff_distance": hd,
-                            "frechet_distance": fd,
-                            "average_pte": apt,
-                            "ped": np.nan,
-                            "sed": np.nan,
-                            "dad": np.nan,
-                            "sad": np.nan,
-                            "issd": np.nan,
+                            "hausdorff_distance": metrics.get("hausdorff_distance"),
+                            "frechet_distance": metrics.get("frechet_distance"),
+                            "average_pte": metrics.get("average_pte"),
+                            "ped": metrics.get("ped"),
+                            "sed": metrics.get("sed"),
+                            "dad": metrics.get("dad"),
+                            "sad": metrics.get("sad"),
+                            "issd": metrics.get("issd"),
                         })
                 except Exception:
                     continue

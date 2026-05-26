@@ -22,7 +22,7 @@ from src.experiments.visualize_osm import (  # noqa: E402
     sample_indices,
     simplify_trajectory,
 )
-from src.metrics.evaluation_metrics import compute_all_metrics  # noqa: E402
+from src.metrics.evaluation_metrics import compute_all_metrics, infer_original_indices  # noqa: E402
 
 
 def prepare_map_data(
@@ -103,7 +103,10 @@ def prepare_map_data(
                     )
 
                     if algo_key not in {"original", "none"}:
-                        metrics = compute_all_metrics(traj, simplified, original_indices=None)
+                        metrics = compute_all_metrics(
+                            traj, simplified,
+                            original_indices=infer_original_indices(traj, simplified),
+                        )
                         metric_rows.append(
                             {
                                 "layer_label": layer_label,

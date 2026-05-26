@@ -15,6 +15,10 @@ Examples::
     # One ratio, first 50 trajectories
     python -m src.experiments.run_single_algorithm \\
         -a vw --compression-ratios 5.0 --max-trajectories 50
+
+    # Size + time check — all trajectories, one CR, no error metrics
+    python -m src.experiments.run_single_algorithm \\
+        -a vw --compression-ratios 5.0 --compress-only
 """
 
 from __future__ import annotations
@@ -81,13 +85,13 @@ def run_algorithm_on_all_trajectories(
     output_csv: Optional[Union[str, Path]] = None,
     show_progress: bool = True,
     write_summary: bool = True,
+    compress_only: bool = False,
 ) -> pd.DataFrame:
     """
     Run one algorithm on each trajectory, for each compression ratio.
 
-    Each row includes: ``trajectory_size`` / ``input_points``, ``output_points``,
-    ``budget``, ``compression_ratio``, ``actual_compression_ratio``,
-    ``runtime_seconds``, ``memory_mb``, ``throughput_traj_per_sec``, plus metrics.
+    With ``compress_only=True``, each row records ``input_points``,
+    ``output_points``, and ``runtime_seconds`` only (no Hausdorff, turn/stop, etc.).
     """
     if not trajectories:
         raise ValueError("No trajectories to process")
@@ -119,23 +123,40 @@ def run_algorithm_on_all_trajectories(
                 algorithm,
                 comp_ratio,
                 algorithm_params,
+                compute_metrics=not compress_only,
             )
             result.update(meta)
             rows.append(result)
 
     results_df = pd.DataFrame(rows)
 
-    out_path = Path(output_csv) if output_csv else Path(output_dir) / f"single_{algorithm}.csv"
+    if compress_only:
+        keep = [
+            "user_id", "trajectory_id", "file_id", "algorithm",
+            "compression_ratio", "budget",
+            "input_points", "output_points", "runtime_seconds",
+            "actual_compression_ratio", "reduction_pct", "error",
+        ]
+        cols = [c for c in keep if c in results_df.columns]
+        results_df = results_df[cols]
+
+    stem = f"compress_{algorithm}" if compress_only else f"single_{algorithm}"
+    out_path = Path(output_csv) if output_csv else Path(output_dir) / f"{stem}.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     results_df.to_csv(out_path, index=False)
 
-    if write_summary and len(results_df) > 0 and "runtime_seconds" in results_df.columns:
-        preferred = [
-            "input_points", "output_points", "actual_compression_ratio",
-            "runtime_seconds", "memory_mb", "throughput_traj_per_sec",
-            "hausdorff_distance", "turn_preservation", "stop_preservation",
-        ]
-        # keep only preferred cols that exist AND are numeric (no tuples)
+    if write_summary and len(results_df) > 0:
+        if compress_only:
+            preferred = [
+                "input_points", "output_points", "runtime_seconds",
+                "actual_compression_ratio", "reduction_pct",
+            ]
+        else:
+            preferred = [
+                "input_points", "output_points", "actual_compression_ratio",
+                "runtime_seconds", "memory_mb", "throughput_traj_per_sec",
+                "hausdorff_distance", "turn_preservation", "stop_preservation",
+            ]
         avail = [
             c for c in preferred
             if c in results_df.columns
@@ -215,6 +236,11 @@ def main() -> None:
         help="Skip writing *_summary.csv",
     )
     parser.add_argument(
+        "--compress-only",
+        action="store_true",
+        help="Per trajectory: input_points, output_points, runtime_seconds only (no error metrics)",
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
     )
@@ -251,17 +277,26 @@ def main() -> None:
         output_csv=args.output,
         show_progress=not args.quiet,
         write_summary=not args.no_summary,
+        compress_only=args.compress_only,
     )
 
-    out = Path(args.output) if args.output else Path(args.output_dir) / f"single_{args.algorithm}.csv"
+    stem = f"compress_{args.algorithm}" if args.compress_only else f"single_{args.algorithm}"
+    out = Path(args.output) if args.output else Path(args.output_dir) / f"{stem}.csv"
     n_err = int(results_df["error"].notna().sum()) if "error" in results_df.columns else 0
     print(f"\nDone: {len(results_df)} rows, {n_err} errors")
     print(f"  CSV: {out}")
     if not args.no_summary:
         print(f"  Summary: {out.with_name(out.stem + '_summary.csv')}")
 
-    if "runtime_seconds" in results_df.columns:
-        ok = results_df[results_df["error"].isna()] if "error" in results_df.columns else results_df
+    ok = results_df[results_df["error"].isna()] if "error" in results_df.columns else results_df
+    if args.compress_only and "output_points" in ok.columns:
+        print(
+            f"  Mean input:  {ok['input_points'].mean():.0f} pts\n"
+            f"  Mean output: {ok['output_points'].mean():.0f} pts\n"
+            f"  Mean time:   {ok['runtime_seconds'].mean():.3f}s per trajectory\n"
+            f"  Mean reduction: {ok['reduction_pct'].mean():.1f}%"
+        )
+    elif "runtime_seconds" in ok.columns:
         print(
             f"  Mean runtime: {ok['runtime_seconds'].mean():.3f}s  "
             f"Mean input size: {ok['input_points'].mean():.0f} pts  "

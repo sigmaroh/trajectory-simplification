@@ -25,7 +25,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.algorithms.baseline_algorithms import simplify_with_budget
 from src.algorithms.proposed_method import proposed_simplification
-from src.metrics.evaluation_metrics import compute_all_metrics
+from src.metrics.evaluation_metrics import compute_all_metrics, infer_original_indices
 
 
 class ExperimentRunner:
@@ -49,7 +49,8 @@ class ExperimentRunner:
                              trajectory: pd.DataFrame,
                              algorithm: str,
                              compression_ratio: float,
-                             algorithm_params: Dict = None) -> Dict:
+                             algorithm_params: Dict = None,
+                             compute_metrics: bool = True) -> Dict:
         """
         Run a single experiment: simplify one trajectory with one algorithm.
         
@@ -58,6 +59,7 @@ class ExperimentRunner:
             algorithm: Algorithm name ('original', 'dp', 'us', 'at', 'squish', 'vw', 'rw', 'greedy_policy', 'proposed')
             compression_ratio: Target compression ratio (e.g., 5.0 means 5x compression)
             algorithm_params: Additional parameters for algorithm
+            compute_metrics: If False, return size + runtime only (no Hausdorff, turn/stop, etc.)
             
         Returns:
             Dictionary with results including metrics, runtime, memory
@@ -68,12 +70,12 @@ class ExperimentRunner:
         # Compute budget
         budget = max(2, int(len(trajectory) / compression_ratio))
         
-        # Measure runtime and memory
-        tracemalloc.start()
-        start_time = time.time()
-        
         try:
-            # Run algorithm
+            if compute_metrics:
+                tracemalloc.start()
+            start_time = time.time()
+
+            indices = None
             if algorithm == 'proposed':
                 simplified, indices = proposed_simplification(
                     trajectory, budget, **algorithm_params
@@ -82,24 +84,8 @@ class ExperimentRunner:
                 simplified = simplify_with_budget(
                     trajectory, algorithm, budget, **algorithm_params
                 )
-                # For baseline algorithms, we need to find indices
-                # This is approximate - in practice, you'd track indices during simplification
-                indices = None
             
-            end_time = time.time()
-            current, peak = tracemalloc.get_traced_memory()
-            tracemalloc.stop()
-            
-            runtime = end_time - start_time
-            memory_mb = peak / 1024 / 1024  # Convert to MB
-            
-            # Compute metrics
-            metrics = compute_all_metrics(trajectory, simplified, indices)
-            
-            # Throughput: trajectories processed per second
-            throughput = 1.0 / runtime if runtime > 0 else float('inf')
-
-            # Add experiment metadata
+            runtime = time.time() - start_time
             n_out = len(simplified)
             result = {
                 'algorithm': algorithm,
@@ -107,14 +93,30 @@ class ExperimentRunner:
                 'budget': budget,
                 'input_points': len(trajectory),
                 'output_points': n_out,
+                'runtime_seconds': runtime,
                 'actual_compression_ratio': (
                     len(trajectory) / n_out if n_out > 0 else None
                 ),
-                'runtime_seconds': runtime,
-                'memory_mb': memory_mb,
-                'throughput_traj_per_sec': throughput,
-                **metrics
+                'reduction_pct': (
+                    100.0 * (1 - n_out / len(trajectory)) if len(trajectory) > 0 else None
+                ),
             }
+
+            if compute_metrics:
+                if indices is None:
+                    indices = infer_original_indices(trajectory, simplified)
+                current, peak = tracemalloc.get_traced_memory()
+                tracemalloc.stop()
+
+                memory_mb = peak / 1024 / 1024
+                throughput = 1.0 / runtime if runtime > 0 else float('inf')
+                metrics = compute_all_metrics(trajectory, simplified, indices)
+
+                result.update({
+                    'memory_mb': memory_mb,
+                    'throughput_traj_per_sec': throughput,
+                    **metrics,
+                })
             
             return result
             

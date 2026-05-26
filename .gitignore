@@ -42,3 +42,7 @@ env/
 ENV/
 .venv/
 /data
+# Environment files
+.env
+.env.*
+webapp/.env

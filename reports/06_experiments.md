@@ -40,7 +40,7 @@ All algorithms return **exactly `budget` points** (post-hoc padding guarantees t
 - **RW**: `ε` found by binary search (20 iterations); post-hoc padding to exact budget
 - **GP**: `α = 0.5` (equal geometric and motion weight)
 - **RL DQN**: pre-trained NumPy MLP; weights at `models/rl_policy.npz`
-- **Proposed**: `w_geo=0.20, w_turn=0.25, w_stop=0.25, w_speed=0.15, w_irregular=0.15`; adaptive refinement threshold `max(2 m, 1% diagonal)`
+- **Proposed**: `w_geo=0.20, w_turn=0.25, w_stop=0.25, w_speed=0.15, w_irregular=0.15` (defaults in `proposed_method.py`); adaptive refinement threshold `max(2 m, 1% diagonal)`
 
 ### 6.1.3 Compression Ratios
 
@@ -51,14 +51,14 @@ Four standard compression ratios are tested:
 | 2× | 50% | 465 points |
 | 5× | 20% | 186 points |
 | 10× | 10% | 93 points |
-| 20× | 5% | 46 points |
+| 20× | 5% | 46 points *(supported by runner; not in current `experiment_results.csv`)* |
 
 ### 6.1.4 Evaluation Metrics
 
 For each experiment we compute the full suite of metrics described in Chapter 5:
 - **Geometric**: Hausdorff distance, APTE, Fréchet distance, PED
 - **Time-synchronised**: SED, DAD, SAD, ISSD
-- **Semantic**: Turn preservation, Stop preservation (proposed method and GP — require returned point indices)
+- **Semantic**: Turn preservation, Stop preservation (**proposed method only** — requires returned point indices)
 - **Efficiency**: Runtime (s), Peak memory (MB), Throughput (trajectories/s)
 
 ### 6.1.5 Experimental Environment
@@ -72,9 +72,21 @@ For each experiment we compute the full suite of metrics described in Chapter 5:
 | Memory measurement | `tracemalloc` (peak allocation) |
 | Random seed | 42 (fixed for reproducibility) |
 
----
+### 6.1.6 Parameter Justification
 
-## 6.2 Experimental Procedure
+| Parameter | Value | Justification |
+|---|---|---|
+| Stop speed threshold | 1.0 m/s | Typical walking-speed cut-off; aligns with GeoLife stop labelling (34% of points) |
+| Min stop duration | 30 s | Filters momentary GPS pauses; requires sustained low-speed region |
+| Turn threshold (evaluation) | 30° | Standard significant-direction-change threshold in literature |
+| Max valid speed (preprocess) | 80 m/s | Removes impossible GPS jumps (~288 km/h); `config.py` |
+| Binary search iterations | 20 | Balances ε precision vs runtime for DP/AT/RW budget matching |
+| ε search range | 0–1000 m | Covers urban GeoLife trajectories without unbounded search |
+| Min trajectory length | 100 points | Ensures enough structure for compression ratios up to 10× |
+| Proposed weights | 0.20/0.25/0.25/0.15/0.15 | Geo bounds Hausdorff; turn/stop equal priority; speed/irregularity secondary |
+| Refinement threshold | max(2 m, 1% diagonal) | Scales with trajectory extent; fixed 5 m over-inserts on long paths |
+
+---
 
 ```
 For each trajectory T in test set:
@@ -102,25 +114,21 @@ All code is in `src/experiments/run_experiments.py`. Results are saved to `resul
 
 ### 6.3.1 Geometric Quality — Hausdorff Distance
 
-**Mean Hausdorff distance (metres) across all compression ratios**:
+**Mean Hausdorff distance (metres)** from `experiment_results.csv` (GeoLife, CR ≈ 2/5/10):
 
-| Algorithm | All CRs | CR = 2× | CR = 5× | CR = 10× | CR = 20× |
-|---|---|---|---|---|---|
-| VW | **116.1** | ~32 | ~78 | ~134 | ~171 |
-| SQUISH | **116.1** | ~32 | ~78 | ~134 | ~171 |
-| RW | 128.3 | ~25 | ~59 | ~84 | ~188 |
-| Greedy Policy | 238.3 | ~87 | ~191 | ~274 | ~343 |
-| Proposed | 372.6 | ~180 | ~434 | ~476 | ~560 |
-| DP† | ~421 | — | — | — | — |
-| SW† | ~84 | — | — | — | — |
-
-† DP and SW results from a separate 5-trajectory GeoLife run (longer trajectories); see note below.
+| Algorithm | CR = 2× | CR = 5× | CR = 10× |
+|---|---|---|---|
+| VW / SQUISH | **25** | **50** | **83** |
+| RW | 37 | 38 | 84 |
+| Greedy Policy | 134 | 178 | 523 |
+| Proposed | 195 | 332 | 316 |
+| DP | 368 | 188 | 254 |
 
 **Key observations**:
-- VW and SQUISH achieve the best geometric quality, as they use area-based criteria that directly minimise geometric distortion.
-- RW is excellent at low compression ratios due to its corridor-following nature.
-- Greedy Policy (GP) has moderate geometric error (238 m mean), reflecting its dual geometric+motion objective.
-- Proposed method has the highest Hausdorff distance (373 m mean), as it explicitly trades geometric accuracy for semantic preservation.
+- VW and SQUISH achieve the best geometric quality (area-based removal).
+- RW is competitive at low and moderate compression.
+- **Proposed method has higher Hausdorff** — explicit trade-off for semantic/time-aware scoring, not a failure of the evaluation.
+- Do **not** claim proposed is “best overall” on geometric metrics.
 
 ### 6.3.1a Trajectory Comparison Plot
 
@@ -139,19 +147,36 @@ This 2×3 grid shows a real GeoLife GPS trajectory (888 points, Beijing urban ar
 - **Bottom-centre (Greedy Policy / RL-inspired)**: GP distributes points based on both geometric deviation and motion-change signal, giving a more balanced result between geometry and direction accuracy than DP or VW.
 - **Bottom-right (Proposed Method)**: The proposed method visibly **concentrates retained points near the stop cluster** (top-right) and the major turns, even at the cost of longer straight segments being approximated with fewer points. This is the direct effect of the stop and turn scoring components.
 
-### 6.3.2 Time-Synchronised Quality — Fréchet Distance
+### 6.3.2 Time-Synchronised Quality — SED, DAD, SAD
 
-**Mean Fréchet distance (metres)**:
+**Mean SED (metres)** — primary time-aware metric:
 
-| Algorithm | Mean Fréchet (m) |
+| Algorithm | CR = 2× | CR = 5× | CR = 10× |
+|---|---|---|---|
+| **Proposed** | **4.7** | **35.3** | **39.2** |
+| VW / SQUISH | 555 | 424 | 388 |
+| RW | 568 | 547 | 356 |
+| Greedy Policy | 556 | 343 | 645 |
+| DP | 377 | 337 | 585 |
+
+The proposed method achieves **10–100× lower SED** than geometric baselines. Baseline SED values are in the **hundreds of metres**; proposed values are **single-digit to low-tens of metres**. This is the proposed method's strongest quantitative result.
+
+**DAD at 5×:** Proposed **40.2°** vs VW **87.0°**, GP **84.4°**.  
+**SAD at 5×:** Proposed **0.53 m/s** vs VW **1.13 m/s**.
+
+**ISSD note:** Values in the CSV can reach 10⁶–10⁷ for all algorithms (integrated squared speed error). Interpret alongside SED; do not treat ISSD spikes as SED unit bugs.
+
+### 6.3.2a Fréchet Distance
+
+| Algorithm | Mean Fréchet 5× (m) |
 |---|---|
-| VW | **118.4** |
-| SQUISH | 118.4 |
-| RW | 132.4 |
-| Greedy Policy | 259.0 |
-| Proposed | 405.0 |
+| VW / SQUISH | **50** |
+| RW | 44 |
+| DP | 252 |
+| Greedy Policy | 298 |
+| Proposed | 370 |
 
-The ordering is consistent with Hausdorff distance. The Fréchet distance is generally slightly higher than Hausdorff for the proposed method because semantic-driven point selection may skip points that maintain the temporal flow of the trajectory.
+Ordering matches Hausdorff. VW/SQUISH/RW dominate geometric panels; proposed ranks last on Fréchet.
 
 ### 6.3.2a Compression-Error Curves
 
@@ -162,11 +187,10 @@ The ordering is consistent with Hausdorff distance. The Fréchet distance is gen
 This multi-panel figure shows how each evaluation metric changes as compression ratio increases from 2× to 10× for all 7 algorithms. Error bars show ±1 standard deviation across the 10 test trajectories. Metrics on a log scale are plotted logarithmically (lower = better); linear-scale metrics (DAD, Runtime) are plotted linearly.
 
 Key patterns visible across panels:
-- **Hausdorff / Fréchet / PED / APTE**: VW, SQUISH, and RW (green, pink, purple) consistently occupy the bottom of these panels — best geometric accuracy. Proposed (black) and DP (orange) are at the top — highest geometric error, for different reasons (semantic trade-off vs. binary-search over-compression).
-- **SED (Synchronized Euclidean Distance)**: Proposed method shows lower SED than expected from its Hausdorff rank, because the proposed method tends to place retained points near temporal events (stops, turns) which coincide with regions where the synchronized interpolation is more accurate.
-- **DAD (Direction Angle Difference)**: The proposed method has lower DAD than DP and greedy_policy at all compression ratios, confirming that prioritising turns preserves directional accuracy.
-- **Turn Preservation**: Only the proposed method (black) has a visible line — all other algorithms return N/A. The line shows a clear downward trend from ~0.94 at 2× to ~0.69 at 10×, quantifying the cost of increased compression on semantic quality.
-- **Runtime**: Greedy Policy and RW are the fastest non-trivial baselines (≈0.05–0.07 s). The proposed method is comparable to VW/SQUISH at all CRs. DP shows distinctly higher runtime due to binary-search overhead.
+- **Hausdorff / Fréchet / PED**: VW, SQUISH, and RW occupy the bottom — best **geometric shape**. Proposed is at the top — highest geometric error by design.
+- **SED / DAD / SAD**: Proposed occupies the bottom — best **time-synchronised motion** fidelity.
+- **Turn / Stop preservation**: Only the proposed method has data (pipeline limitation).
+- **Runtime**: Greedy Policy and RW fastest; proposed ~0.45 s mean (batch-suitable, not real-time streaming).
 
 The per-CR versions (`compression_error_curves_2x.png`, `_5x.png`, `_10x.png`) show the same data restricted to a single compression ratio, enabling cleaner comparison between algorithms at each operating point.
 
@@ -174,33 +198,27 @@ The per-CR versions (`compression_error_curves_2x.png`, `_5x.png`, `_10x.png`) s
 
 **Only the proposed method returns selected indices to the evaluation pipeline**, so semantic preservation metrics in `experiment_results.csv` are populated for **proposed** rows only. Greedy Policy uses motion-aware scoring internally but does not export indices in the current runner.
 
-**Turn preservation (Proposed method)**:
+**Turn preservation (Proposed method only)**:
 
 | Compression Ratio | Turn Preservation |
 |---|---|
-| 2× | **0.969 (96.9%)** |
-| 5× | 0.787 (78.7%) |
-| 10× | 0.766 (76.6%) |
-| 20× | 0.404 (40.4%) |
-| **Mean** | **0.765** |
+| 2× | **0.902 (90.2%)** |
+| 5× | 0.598 (59.8%) |
+| 10× | 0.427 (42.7%) |
 
-**Stop preservation (Proposed method)**:
+**Stop preservation (Proposed method only)**:
 
 | Compression Ratio | Stop Preservation |
 |---|---|
-| 2× | **1.000 (100%)** |
-| 5× | 0.750 (75.0%) |
-| 10× | 0.750 (75.0%) |
-| 20× | 0.250 (25.0%) |
-| **Mean** | **0.890** |
+| 2× | **0.917 (91.7%)** |
+| 5× | 0.687 (68.7%) |
+| 10× | 0.571 (57.1%) |
 
 **Key observations**:
-- At 2× compression the proposed method achieves near-perfect preservation (96.9% turns, 100% stops).
-- At 5× and 10× compression, both metrics remain high (>75%), indicating the method robustly preserves semantic features at moderate compression.
-- At 20× (extreme) compression, turn preservation drops to 40% while stop preservation drops to 25%, expected given only 5% of points are retained.
-- Stop preservation is generally higher than turn preservation because stops span many consecutive points (any one preserved counts), while turns are localised to single points.
-
-**Baseline algorithms do not return selected indices** in the current implementation, so turn/stop metrics are not directly comparable. However, since they use no semantic scoring, they have no mechanism to favour turn or stop points — their semantic preservation is effectively random given the budget.
+- Semantic metrics are **only computed for the proposed method** in `run_experiments.py`.
+- At 2× compression, turn/stop preservation exceeds 90%.
+- At 10×, both metrics fall to ~43–57% as the budget tightens.
+- **Do not compare baseline stop/turn rates** — baselines do not export selected indices in the current pipeline.
 
 ### 6.3.3a Metric Comparison at 5× and 10× Compression
 
@@ -210,22 +228,20 @@ The per-CR versions (`compression_error_curves_2x.png`, `_5x.png`, `_10x.png`) s
 
 Each sub-panel is a bar chart for one metric at exactly 5× compression (20% of original points retained). Error bars show standard deviation across trajectories. This view makes it easy to see which algorithm wins on each individual metric at this compression level.
 
-- **Hausdorff / Fréchet**: VW and SQUISH have the shortest bars (best geometry). DP has a tall bar because binary-search over-compression often yields far fewer than the target 20% of points. The proposed method has the tallest bar in the geometric panels — the visible cost of semantic prioritisation.
-- **DAD**: The proposed method's bar is notably shorter than DP's and greedy_policy's, confirming that preserving turns also improves directional accuracy.
-- **Turn Preservation**: Only the proposed method bar is non-zero. A bar height of ~0.79 means it preserves 79% of all significant turns at 5× compression — a capability entirely absent from the other algorithms.
-- **Stop Preservation**: Similarly, only the proposed method has a non-zero bar (~0.75), confirming that stop regions are explicitly retained.
-- **Runtime**: Greedy Policy and RW have the shortest runtime bars among the evaluated baselines. VW and SQUISH bars are slightly taller than proposed, despite their better geometry, because their iterative priority-queue implementations have non-trivial overhead at this trajectory size.
+- **Turn Preservation**: Only the proposed method bar is non-zero (~0.60 at 5×).
+- **Stop Preservation**: Only the proposed method bar is non-zero (~0.69 at 5×).
+- **SED**: Proposed bar is dramatically shorter than all baselines — its primary strength.
+- **Runtime**: Greedy Policy and RW shortest; proposed ~0.73 s at 5× (batch OK, not real-time).
 
 ![Metric Comparison 10x](../results/figures/metric_comparison_10x.png)
 
 **Figure 6.4 — Per-Metric Algorithm Comparison at 10× Compression**
 
 Same layout as Figure 6.3 but at 10× compression (10% of points retained). Compared to 5×:
-- All geometric error bars grow larger — more aggressive compression means more points are discarded.
-- The proposed method's turn preservation bar drops from ~0.79 to ~0.69, reflecting the harder budget constraint at 10× compression.
-- Stop preservation for the proposed method remains at ~0.75, more resilient than turn preservation because stops span multiple consecutive points and any one retained point within a stop region counts.
-- Runtime bars shrink slightly for algorithms that use binary search (DP, RW, SW) because fewer output points means the search terminates sooner.
-- DP's geometric error bar grows disproportionately at 10×, reflecting its tendency to over-compress (producing far fewer than the target number of points when using binary-search on ε).
+- All geometric error bars grow larger.
+- Proposed turn preservation drops to ~0.43; stop preservation to ~0.57.
+- **Proposed SED remains ~39 m** while baselines stay in the hundreds of metres.
+- DP shows **low PED (~4 m) but high SED (~585 m)** — geometric vs time-aware metrics diverge.
 
 ### 6.3.4 Runtime and Efficiency
 
@@ -233,20 +249,16 @@ Same layout as Figure 6.3 but at 10× compression (10% of points retained). Comp
 
 | Algorithm | Runtime (s) | Throughput (traj/s) | Relative to Proposed |
 |---|---|---|---|
-| Greedy Policy | 0.049 | 20.4 | 3.7× faster |
-| RW | 0.069 | 14.5 | 2.6× faster |
-| VW | 0.165 | 6.1 | 1.1× faster |
-| **Proposed** | **0.180** | **5.6** | **1.0×** |
-| SQUISH | 0.229 | 4.4 | 1.3× slower |
-| DP† | ~4.1 | ~0.24 | 23× slower |
-| SW† | ~23.2 | ~0.04 | 129× slower |
-
-† DP and SW runtimes from the 5-trajectory GeoLife run on longer trajectories. Their O(n²) worst-case complexity makes them significantly slower for longer GeoLife trajectories.
+| Greedy Policy | 0.14 | ~7 | 3× faster |
+| RW | 0.39 | ~2.6 | similar |
+| **Proposed** | **0.45** | **~2.2** | **1.0×** |
+| VW | 3.98 | ~0.25 | 9× slower |
+| DP | 6.36 | ~0.16 | 14× slower |
 
 **Key observations**:
-- Greedy Policy is the fastest non-trivial algorithm in this benchmark (0.049 s) — 3.7× faster than the proposed method while operating with a similar value-function approach.
-- The proposed method (0.180 s) is fast enough for real-time processing and batch workloads.
-- DP and SW become very slow (4–23 s) for the longer GeoLife trajectories due to their O(n²) and O(n log n) binary-search overhead.
+- Greedy Policy is the fastest motion-aware baseline.
+- The proposed method (~0.45 s) is suitable for **batch offline** processing, not evaluated as **real-time streaming**.
+- DP remains slow on longer trajectories due to binary-search overhead.
 
 ![Runtime Scalability](../results/figures/runtime_scalability.png)
 

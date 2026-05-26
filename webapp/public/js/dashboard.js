@@ -48,9 +48,11 @@ async function loadFilters() {
 }
 
 // ─── fetch one metric comparison ─────────────────────────────────────────────
-async function fetchComparison(metric, algoFilter) {
+async function fetchComparison(metric, { algo, user, cr } = {}) {
   const params = new URLSearchParams({ metric });
-  if (algoFilter) params.set('algorithms', algoFilter);
+  if (algo) params.set('algorithms', algo);
+  if (user) params.set('user_id', user);
+  if (cr) params.set('compression_ratio', cr);
   return fetch(`/api/metrics/comparison?${params}`).then(r => r.json());
 }
 
@@ -67,50 +69,6 @@ function buildDatasets(data) {
   }));
 }
 
-// ─── stat cards ───────────────────────────────────────────────────────────────
-async function updateStatCards(algoFilter, userFilter) {
-  const params = new URLSearchParams();
-  if (algoFilter) params.set('algorithm', algoFilter);
-  if (userFilter) params.set('user_id', userFilter);
-  const summary = await fetch(`/api/metrics/summary?${params}`).then(r => r.json());
-
-  const algos = [...new Set(summary.map(r => r.algorithm))];
-  document.getElementById('s-algos').textContent = algos.length || '—';
-  document.getElementById('s-runs').textContent  = summary.reduce((s,r) => s + (r.count||0), 0) || '—';
-
-  // best hausdorff
-  const withH = summary.filter(r => r.hausdorff_distance_mean != null);
-  if (withH.length) {
-    const b = withH.reduce((a,b) => a.hausdorff_distance_mean < b.hausdorff_distance_mean ? a : b);
-    document.getElementById('s-best-h').textContent      = `${b.hausdorff_distance_mean.toFixed(0)} m`;
-    document.getElementById('s-best-h-algo').textContent = b.algorithm;
-  }
-
-  // best fréchet
-  const withFr = summary.filter(r => r.frechet_distance_mean != null);
-  if (withFr.length) {
-    const b = withFr.reduce((a,b) => a.frechet_distance_mean < b.frechet_distance_mean ? a : b);
-    document.getElementById('s-best-fr').textContent      = `${b.frechet_distance_mean.toFixed(0)} m`;
-    document.getElementById('s-best-fr-algo').textContent = b.algorithm;
-  }
-
-  // best stop preservation
-  const withSP = summary.filter(r => r.stop_preservation_mean != null);
-  if (withSP.length) {
-    const b = withSP.reduce((a,b) => a.stop_preservation_mean > b.stop_preservation_mean ? a : b);
-    document.getElementById('s-best-sp').textContent      = `${(b.stop_preservation_mean*100).toFixed(1)}%`;
-    document.getElementById('s-best-sp-algo').textContent = b.algorithm;
-  }
-
-  // fastest
-  const withRT = summary.filter(r => r.runtime_seconds_mean != null);
-  if (withRT.length) {
-    const b = withRT.reduce((a,b) => a.runtime_seconds_mean < b.runtime_seconds_mean ? a : b);
-    document.getElementById('s-fastest').textContent      = `${b.runtime_seconds_mean.toFixed(3)}s`;
-    document.getElementById('s-fastest-algo').textContent = b.algorithm;
-  }
-}
-
 // ─── summary table ────────────────────────────────────────────────────────────
 function fmt(v, dp = 2) {
   if (v == null) return '<span style="color:#94a3b8">—</span>';
@@ -123,15 +81,16 @@ function pct(v) {
   return `<span style="color:${color};font-weight:600">${p.toFixed(1)}%</span>`;
 }
 
-async function renderTable(algoFilter, userFilter) {
+async function renderTable({ algo, user, cr } = {}) {
   const loading = document.getElementById('table-loading');
   const wrap    = document.getElementById('summary-table');
   loading.style.display = 'block';
   wrap.style.display    = 'none';
 
   const params = new URLSearchParams();
-  if (algoFilter) params.set('algorithm', algoFilter);
-  if (userFilter) params.set('user_id', userFilter);
+  if (algo) params.set('algorithm', algo);
+  if (user) params.set('user_id', user);
+  if (cr) params.set('compression_ratio', cr);
   const rows = await fetch(`/api/metrics/summary?${params}`).then(r => r.json());
 
   const cols = [
@@ -181,15 +140,15 @@ async function renderTable(algoFilter, userFilter) {
 }
 
 // ─── render all charts ────────────────────────────────────────────────────────
-async function renderCharts(algoFilter) {
+async function renderCharts(filters) {
   // fetch all 6 metrics in parallel
   const [h, fr, sp, tp, apte, rt] = await Promise.all([
-    fetchComparison('hausdorff_distance',  algoFilter),
-    fetchComparison('frechet_distance',    algoFilter),
-    fetchComparison('stop_preservation',   algoFilter),
-    fetchComparison('turn_preservation',   algoFilter),
-    fetchComparison('average_pte',         algoFilter),
-    fetchComparison('runtime_seconds',     algoFilter),
+    fetchComparison('hausdorff_distance',  filters),
+    fetchComparison('frechet_distance',    filters),
+    fetchComparison('stop_preservation',   filters),
+    fetchComparison('turn_preservation',   filters),
+    fetchComparison('average_pte',         filters),
+    fetchComparison('runtime_seconds',     filters),
   ]);
 
   const labels = h.compressionRatios.map(c => `${c}×`);
@@ -221,11 +180,10 @@ function getFilters() {
 }
 
 async function applyFilters() {
-  const { algo, user } = getFilters();
+  const filters = getFilters();
   await Promise.all([
-    renderCharts(algo),
-    renderTable(algo, user),
-    updateStatCards(algo, user),
+    renderCharts(filters),
+    renderTable(filters),
   ]);
 }
 
@@ -236,6 +194,10 @@ function resetFilters() {
 
 // ─── init ─────────────────────────────────────────────────────────────────────
 (async () => {
-  await loadFilters();
-  await applyFilters();
+  try {
+    await loadFilters();
+    await applyFilters();
+  } catch (err) {
+    console.error('Dashboard load failed:', err);
+  }
 })();

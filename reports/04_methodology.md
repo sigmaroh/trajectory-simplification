@@ -370,10 +370,10 @@ Unlike ε-threshold methods, the proposed method takes `budget = k` directly. Th
 
 #### Preserving turns, stops, and speed changes
 
-| Feature | GeoLife prevalence | Mechanism | Result |
+| Feature | GeoLife prevalence | Mechanism | Result (proposed, benchmark CSV) |
 |---|---|---|---|
-| **Turns** | ~32.4% of points | `TurnScore` with bearing smoothing + variance boost | Turn pres. **76.5%** mean; best among baselines with explicit stop priority |
-| **Stops** | ~34.2% of points | Duration-based `StopScore`, 1.5× boost ≥ 30 s | Stop pres. **100%** at 2–10× CR; **88.3%** at 20× |
+| **Turns** | ~32.4% of points | `TurnScore` with bearing smoothing + variance boost | **90.2%** at 2×; **42.7%** at 10× |
+| **Stops** | ~34.2% of points | Duration-based `StopScore`, 1.5× boost ≥ 30 s | **91.7%** at 2×; **57.1%** at 10× |
 | **Speed changes** | Mode transitions | `SpeedChangeScore` |Δv| smoothed | Weight 0.15; complements stop and turn |
 
 #### Irregular sampling
@@ -391,12 +391,12 @@ GeoLife CV = 5.96; 87.4% of trajectories with CV > 1.0. The **irregularity score
 | Criterion | Addressed? | Evidence |
 |---|---|---|
 | Fixed compression budget | Yes — exact k points | All experiments at identical CRs |
-| Turn preservation | Yes — `TurnScore` | 76.5% mean; above geometric baselines |
-| Stop preservation | Yes — `StopScore` | 100% at 2–10×; best in study |
+| Turn preservation | Yes — `TurnScore` | ~90% at 2×; ~43% at 10× (proposed only) |
+| Stop preservation | Yes — `StopScore` | ~92% at 2×; ~57% at 10× (proposed only) |
 | Speed-change preservation | Yes — `SpeedChangeScore` | Component weight 0.15 |
 | Irregular sampling | Yes — `IrregularityScore` | Motivated by Ch. 3; direct in scoring |
 | Noise robustness | Partial — smoothing + preprocessing | No dedicated denoising module |
-| Predictable quality | Semantic metrics stable; geometric trade-off bounded | Documented in Ch. 7 |
+| Predictable quality | Semantic/time-sync metrics strong; geometric trade-off explicit | SED best among all algorithms; Hausdorff higher than VW/RW |
 
 **Conclusion**: The proposed method fulfils Objective 3 — a new, training-free simplifier under exact fixed budget that explicitly preserves turns, stops, speed changes, and sparse-sample points on irregular, noisy GeoLife GPS data. Implementation: `src/algorithms/proposed_method.py`.
 

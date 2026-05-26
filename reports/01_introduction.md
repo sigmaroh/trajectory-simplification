@@ -32,13 +32,13 @@ This research aims to develop a novel trajectory simplification algorithm that:
 1. Preserves important semantic features (turns, stops, speed changes) under fixed compression budgets
 2. Handles irregular sampling patterns effectively
 3. Is robust to noise in GPS measurements
-4. Achieves competitive or superior performance compared to baseline methods across multiple evaluation metrics
+4. Achieves competitive performance on **time-synchronised and semantic metrics** (SED, turn/stop preservation) while accepting higher geometric error than VW/RW — not a claim of superiority on all metrics
 
 ## 1.4 Contributions
 
 The main contributions of this work are:
 
-1. **Novel Algorithm**: A turn/speed/stop-aware trajectory simplification method that combines geometric and semantic importance scoring under a fixed compression budget, directly addressing the concrete weakness of instability under irregular sampling and noise.
+1. **Novel Algorithm**: A five-component (geo + turn + stop + speed + irregularity) trajectory simplification method under a fixed compression budget, targeting movement/semantic preservation with bounded geometric error.
 
 2. **RL-Inspired Baseline**: A training-free Greedy Policy simplification algorithm that mirrors the per-point decision structure of Wang et al. (2021) reinforcement learning approach, enabling fair comparison with learning-based methods without requiring offline training.
 

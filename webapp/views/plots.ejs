@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <%- include('partials/head', { title: title }) %>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    .section-title {
+      font-size: 1.05rem; font-weight: 700; color: var(--text);
+      margin: 1.4rem 0 .6rem; padding-bottom: .3rem;
+      border-bottom: 2px solid var(--border);
+    }
+    .plots-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .plot-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: .9rem 1rem;
+    }
+    .plot-card h4 {
+      font-size: .82rem; font-weight: 700; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .04em; margin-bottom: .6rem;
+    }
+    .plot-wrap { position: relative; height: 240px; }
+    .bar-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .algo-legend {
+      display: flex; flex-wrap: wrap; gap: .5rem .9rem;
+      margin-bottom: .9rem;
+    }
+    .algo-dot {
+      display: flex; align-items: center; gap: .35rem;
+      font-size: .78rem; font-weight: 600;
+    }
+    .algo-dot span {
+      width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0;
+    }
+    .tabs { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .tab {
+      padding: .38rem .9rem; border-radius: 6px; font-size: .83rem; font-weight: 600;
+      cursor: pointer; border: 1.5px solid var(--border); background: #fff; color: var(--text-muted);
+      transition: all .15s;
+    }
+    .tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .tab-section { display: none; }
+    .tab-section.active { display: block; }
+  </style>
+</head>
+<body>
+
+<%- include('partials/navbar', { active: 'plots' }) %>
+
+<div class="page">
+
+  <div class="filter-bar">
+    <label>Algorithm filter
+      <select id="f-algo"><option value="">All algorithms</option></select>
+    </label>
+    <label>User
+      <select id="f-user"><option value="">All users</option></select>
+    </label>
+    <button class="btn btn-primary" onclick="reloadAll()">Apply</button>
+    <button class="btn btn-outline" onclick="resetFilters()">Reset</button>
+    <span id="plot-status" style="font-size:.8rem;color:#64748b;align-self:center"></span>
+  </div>
+
+  <div class="algo-legend" id="algo-legend"></div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('tab-curves')">Compression–Error Curves</button>
+    <button class="tab" onclick="showTab('tab-bars')">Bar Comparison</button>
+    <button class="tab" onclick="showTab('tab-semantic')">Semantic Preservation</button>
+    <button class="tab" onclick="showTab('tab-efficiency')">Runtime &amp; Memory</button>
+  </div>
+
+  <div class="tab-section active" id="tab-curves">
+    <div class="section-title">Compression Ratio vs Error Metrics</div>
+    <p style="font-size:.8rem;color:var(--text-muted);margin-bottom:.8rem">
+      Each line = one algorithm. X-axis snapped to target CRs (2×, 5×, 10×, 20×).
+    </p>
+    <div class="plots-grid" id="grid-curves"></div>
+  </div>
+
+  <div class="tab-section" id="tab-bars">
+    <div class="section-title">Algorithm Comparison at Each Compression Ratio</div>
+    <div class="filter-bar" style="margin-bottom:.9rem">
+      <label>Metric
+        <select id="bar-metric" onchange="renderBarCharts()"></select>
+      </label>
+    </div>
+    <div class="bar-grid" id="grid-bars"></div>
+  </div>
+
+  <div class="tab-section" id="tab-semantic">
+    <div class="section-title">Semantic Preservation — Turns &amp; Stops</div>
+    <div class="plots-grid" id="grid-semantic"></div>
+  </div>
+
+  <div class="tab-section" id="tab-efficiency">
+    <div class="section-title">Runtime, Memory &amp; Throughput</div>
+    <div class="plots-grid" id="grid-efficiency"></div>
+  </div>
+
+</div>
+
+<script src="/js/plots.js"></script>
+</body>
+</html>

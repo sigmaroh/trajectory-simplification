@@ -123,7 +123,7 @@ Measures what fraction of significant direction changes (turns) in the original 
 2. For each turn point at index i, check whether any selected index falls within a window of radius `w = max(1, n/k)` around i.
 3. Preservation ratio = (number of preserved turns) / (total turns).
 
-**Interpretation**: 1.0 = all turns preserved; 0.0 = no turns preserved. A score of 0.765 means 76.5% of turns are visible in the simplified trajectory.
+**Interpretation**: 1.0 = all turns preserved; 0.0 = no turns preserved. A score of 0.90 at 2× compression means 90% of turns remain represented in the simplified trajectory.
 
 ### 5.3.2 Stop Preservation
 

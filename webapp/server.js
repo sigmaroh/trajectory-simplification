@@ -1,9 +1,19 @@
+// Load .env before anything else (silently ignored if dotenv not installed)
+try { require('dotenv').config(); } catch (_) {}
+
 const express = require('express');
 const path    = require('path');
 const cors    = require('cors');
 
+// Warm up the DB pool on startup
+const { pool } = require('./db');
+pool.query('SELECT 1').catch(err =>
+  console.warn('  [db] PostgreSQL not reachable:', err.message)
+);
+
 const metricsRouter      = require('./routes/metrics');
 const trajectoriesRouter = require('./routes/trajectories');
+const pagesRouter        = require('./routes/pages');
 
 const app  = express();
 
@@ -13,23 +23,23 @@ const PORT = portArg
   ? parseInt(portArg.includes('=') ? portArg.split('=')[1] : process.argv[process.argv.indexOf(portArg) + 1])
   : parseInt(process.env.PORT || '3000');
 
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/api/metrics',      metricsRouter);
 app.use('/api/trajectories', trajectoriesRouter);
-
-// root → dashboard
-app.get('/', (_req, res) =>
-  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'))
-);
+app.use('/api/sync',         require('./routes/sync'));
+app.use('/',                 pagesRouter);
 
 const server = app.listen(PORT, () => {
   console.log(`\n  Trajectory Dashboard running at http://localhost:${PORT}`);
-  console.log('  Dashboard : http://localhost:' + PORT + '/dashboard.html');
-  console.log('  Plots     : http://localhost:' + PORT + '/plots.html');
-  console.log('  Map       : http://localhost:' + PORT + '/map.html\n');
+  console.log('  Dashboard : http://localhost:' + PORT + '/dashboard');
+  console.log('  Plots     : http://localhost:' + PORT + '/plots');
+  console.log('  Map       : http://localhost:' + PORT + '/map\n');
 });
 
 server.on('error', err => {
